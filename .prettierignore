@@ -1,0 +1,8 @@
+node_modules
+.data
+dist
+cloudfunctions/avalon/index.js
+package-lock.json
+cloudfunctions/avalon/package-lock.json
+test-results
+playwright-report

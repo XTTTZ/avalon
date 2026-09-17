@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "functionRoot": "./cloudfunctions",
+  "functions": [
+    {
+      "name": "avalon",
+      "type": "Event",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 20,
+      "memorySize": 256,
+      "installDependency": false,
+      "ignore": [".DS_Store"]
+    }
+  ]
+}

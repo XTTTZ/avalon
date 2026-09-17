@@ -1,0 +1,22 @@
+{
+  "collections": [
+    {
+      "name": "avalon_rooms",
+      "indexes": [{ "name": "expiresAt", "keys": [{ "name": "expiresAt", "direction": "1" }] }]
+    },
+    {
+      "name": "avalon_users",
+      "indexes": [{ "name": "expiresAt", "keys": [{ "name": "expiresAt", "direction": "1" }] }]
+    },
+    {
+      "name": "avalon_notes",
+      "indexes": [{ "name": "expiresAt", "keys": [{ "name": "expiresAt", "direction": "1" }] }]
+    },
+    {
+      "name": "avalon_oauth",
+      "indexes": [{ "name": "expiresAt", "keys": [{ "name": "expiresAt", "direction": "1" }] }]
+    }
+  ],
+  "securityRuleForEveryCollection": { "read": false, "write": false },
+  "note": "Deployment checklist, not a CLI import format. Create these document collections and numeric ascending indexes in the CloudBase console. Apply database.rules.json to each collection."
+}

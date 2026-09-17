@@ -1,0 +1,34 @@
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": ["tcb:DescribeEnvs", "tcb:DescribeStaticStore"],
+      "resource": ["*"]
+    },
+    {
+      "effect": "allow",
+      "action": ["tcb:*"],
+      "resource": [
+        "qcs::tcb::uin/REPLACE_UIN:env/REPLACE_ENV_ID",
+        "qcs::tcb:REPLACE_REGION::env/REPLACE_ENV_ID"
+      ]
+    },
+    {
+      "effect": "allow",
+      "action": ["scf:GetFunction", "scf:GetFunctionAddress", "scf:UpdateFunctionCode"],
+      "resource": [
+        "qcs::scf:REPLACE_REGION:uin/REPLACE_UIN:namespace/REPLACE_ENV_ID",
+        "qcs::scf:REPLACE_REGION:uin/REPLACE_UIN:namespace/REPLACE_ENV_ID/function/avalon"
+      ]
+    },
+    {
+      "effect": "allow",
+      "action": ["cos:*"],
+      "resource": [
+        "qcs::cos:REPLACE_REGION:uid/REPLACE_APP_ID:REPLACE_STORAGE_BUCKET/*",
+        "qcs::cos:REPLACE_REGION:uid/REPLACE_APP_ID:REPLACE_HOSTING_BUCKET/*"
+      ]
+    }
+  ]
+}

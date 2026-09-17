@@ -1,0 +1,82 @@
+name: Deploy CloudBase
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: avalon-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TCB_ENV_ID: ${{ vars.TCB_ENV_ID }}
+      TCB_REGION: ${{ vars.TCB_REGION }}
+      API_URL: ${{ vars.API_URL }}
+      WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
+      VITE_AUTH_MODE: ${{ vars.AUTH_MODE || 'guest' }}
+      VITE_API_URL: ${{ vars.API_URL }}
+      CLOUD_SMOKE_API_URL: ${{ vars.API_URL }}
+      CLOUD_SMOKE_ORIGIN: ${{ vars.WEB_ORIGIN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check release belongs to main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Check deployment variables
+        run: node scripts/check-deploy-config.mjs
+      - name: Install dependencies
+        run: npm ci
+      - name: Build release
+        run: npm run build
+      - name: Install cloud function production dependencies
+        run: npm ci --prefix cloudfunctions/avalon --omit=dev
+      - name: Install pinned CloudBase CLI
+        run: npm install --global @cloudbase/cli@3.8.2
+      - name: Log in with deployment credentials
+        env:
+          CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+          CLOUDBASE_API_ENDPOINT: https://${{ vars.TCB_ENV_ID }}.${{ vars.TCB_REGION }}.tcb-api.tencentcloudapi.com
+          TCB_SECRET_ID: ${{ secrets.TCB_SECRET_ID }}
+          TCB_SECRET_KEY: ${{ secrets.TCB_SECRET_KEY }}
+        run: |
+          if test -n "$CLOUDBASE_API_KEY"; then
+            tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$TCB_ENV_ID" -r "$TCB_REGION"
+          else
+            test -n "$TCB_SECRET_ID" || { echo 'Missing CLOUDBASE_API_KEY or TCB_SECRET_ID'; exit 1; }
+            test -n "$TCB_SECRET_KEY" || { echo 'Missing repository secret: TCB_SECRET_KEY'; exit 1; }
+            tcb login --apiKeyId "$TCB_SECRET_ID" --apiKey "$TCB_SECRET_KEY"
+          fi
+      - name: Update cloud function code
+        run: tcb fn code update avalon -e "$TCB_ENV_ID" -r "$TCB_REGION" --yes
+      - name: Check API before updating website
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if npm run smoke:cloud; then exit 0; fi
+            sleep 5
+          done
+          exit 1
+      - name: Deploy website with backup and verification
+        run: tcb hosting deploy ./dist -e "$TCB_ENV_ID" -r "$TCB_REGION" --safe --verify
+      - name: Check published website and API
+        run: |
+          curl --fail --silent --show-error --max-time 30 "$WEB_ORIGIN/" > /dev/null
+          npm run smoke:cloud
