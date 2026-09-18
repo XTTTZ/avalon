@@ -25,6 +25,8 @@ npm run test:e2e         # 手机尺寸真实浏览器 + 多玩家完整流程
 
 ## CloudBase 部署
 
+网页也支持 **GitHub Pages + GitHub Actions** 自动发布，游戏后端继续使用 CloudBase。见 [Pages 发布说明](docs/github-pages.md)；推送到 `main` 后先测试，再发布到 [www.avalonxty.site](https://www.avalonxty.site/)。
+
 你的新加坡环境使用 PostgreSQL、默认域名和 guest 登录，请先看 [你的部署操作单](docs/your-deployment.md)。没有公众号或自有域名也可以直接分享网址玩游戏。
 
 第一次部署推荐按 [逐步操作指南](docs/deploy-step-by-step.md) 执行，包含 GitHub 登录、首次上线、公众号接入、CI/CD 配置与回滚。项目已附带 `.github/workflows/ci.yml` 和 `deploy.yml`；日常发布通过 GitHub 手动运行或推送 `v*` 标签，使用 CLI 仅更新云函数代码并发布构建后的网页。

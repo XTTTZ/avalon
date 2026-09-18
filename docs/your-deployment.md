@@ -4,7 +4,7 @@
 
 | 项目            | 值                                                              |
 | --------------- | --------------------------------------------------------------- |
-| GitHub 私有仓库 | [XTTTZ/avalon](https://github.com/XTTTZ/avalon)                 |
+| GitHub 公开仓库 | [XTTTZ/avalon](https://github.com/XTTTZ/avalon)                 |
 | CloudBase 环境  | `avalon-d4gupz2rs904bec10`                                      |
 | 地域            | `ap-singapore`（新加坡，国内站账号）                            |
 | 数据库          | PostgreSQL，使用 `cloudbase/postgres.sql`                       |
@@ -67,7 +67,7 @@ Cloudflare Pages 使用 `avalonxty.site` 根域名时，需要把 DNS nameserver
 7. 点击 **Run workflow**，选择 `main`，再点绿色按钮。
 8. 等待 `verify`、`deploy` 都显示绿色，再打开网页建房。
 
-流程会先测试，再更新云函数代码，检查 API，备份并上传网页。数据库、云函数环境变量和清理触发器保持原配置。提交到 `main` 只跑 CI；点击 Run workflow 或推送 `v*` 标签才发布。
+流程会先测试，再更新云函数代码，检查 API，备份并上传 CloudBase 网页。数据库、云函数环境变量和清理触发器保持原配置。CloudBase 发布仍须点击 Run workflow 或推送 `v*` 标签；提交到 `main` 会测试并通过新增的 [GitHub Pages 工作流](github-pages.md) 自动发布 Pages 网页。
 
 如果左侧找不到工作流，先确认文件已推送到 `main`、仓库 Actions 已启用；如果 GitHub 要求允许 Actions，点击允许。
 

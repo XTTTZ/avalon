@@ -1,0 +1,81 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: read
+    env:
+      VITE_AUTH_MODE: ${{ vars.AUTH_MODE || 'guest' }}
+      VITE_API_URL: ${{ vars.API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Check public API configuration
+        run: |
+          node --input-type=module <<'JS'
+          const api = new URL(process.env.VITE_API_URL);
+          if (api.protocol !== 'https:' || api.username || api.password || api.search || api.hash || api.pathname !== '/api/avalon')
+            throw new Error('Set the repository variable API_URL to the HTTPS CloudBase API ending in /api/avalon.');
+          if (!['guest', 'wechat'].includes(process.env.VITE_AUTH_MODE))
+            throw new Error('AUTH_MODE must be guest or wechat.');
+          JS
+      - name: Read Pages URL and base path
+        id: pages
+        uses: actions/configure-pages@v5
+      - run: npm ci
+      - name: Build website for the Pages path
+        env:
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npx vite build --base "${PAGES_BASE_PATH}/"
+      - name: Check CloudBase permits this website
+        env:
+          CLOUD_SMOKE_API_URL: ${{ vars.API_URL }}
+          CLOUD_SMOKE_ORIGIN: ${{ steps.pages.outputs.origin }}
+        run: npm run smoke:cloud
+      - name: Upload website only
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish website
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Check published homepage
+        env:
+          PAGES_URL: ${{ steps.deployment.outputs.page_url }}
+        run: curl --fail --silent --show-error --retry 6 --retry-delay 5 --retry-all-errors --max-time 30 "$PAGES_URL" > /dev/null
