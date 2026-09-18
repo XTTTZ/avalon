@@ -8,10 +8,13 @@
 | CloudBase 环境  | `avalon-d4gupz2rs904bec10`                                      |
 | 地域            | `ap-singapore`（新加坡，国内站账号）                            |
 | 数据库          | PostgreSQL，使用 `cloudbase/postgres.sql`                       |
-| 网页网址        | `https://avalon-d4gupz2rs904bec10-1327068090.tcloudbaseapp.com` |
+| CloudBase 网页  | `https://avalon-d4gupz2rs904bec10-1327068090.tcloudbaseapp.com` |
+| Pages 网页      | [www.avalonxty.site](https://www.avalonxty.site/)               |
 | 登录            | guest，同一浏览器保存设备身份                                   |
 
 不用购买域名或注册公众号即可分享网址玩游戏。微信内可打开网址；当前没有 OpenID 登录。请使用同一浏览器、同一网址，清除网站数据、换手机或无痕模式会成为新玩家。
+
+2026-09-19 已完成 [GitHub Pages 自动发布](github-pages.md)，以后新局使用 `https://www.avalonxty.site/`。旧 CloudBase 网址保留，旧对局继续从原网址进入；以下默认域名提示仅适用于旧网址。
 
 手机首次打开可能先显示腾讯云“页面访问提示”，等倒计时结束，点击 **确定访问** 即可；Cookie 有效时不会反复提示。默认域名由平台定位为开发测试用途，只适合当前小范围验收，无法承诺长期生产可用；移除提示需要自定义域名。[CloudBase 默认域名说明](https://docs.cloudbase.net/service/alias)
 

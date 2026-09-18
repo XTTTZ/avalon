@@ -2,6 +2,8 @@
 
 网页地址：[https://www.avalonxty.site/](https://www.avalonxty.site/)。仓库已绑定这个自定义域名，GitHub 已签发 HTTPS 证书。网页由 GitHub Pages 托管，游戏 API 和数据库继续使用 CloudBase 新加坡环境。公众号菜单也可以填写这个地址，目前仍是 guest 登录。
 
+2026-09-19 已完成首次发布：[Actions 成功记录](https://github.com/XTTTZ/avalon/actions/runs/35376552492)。跨域、登录、建房、邀请加入、刷新恢复、五人开局和身份隐藏均已实测通过。下面的首次配置已完成，不必重复操作。
+
 ## 首次配置
 
 1. 打开 [仓库 Pages 设置](https://github.com/XTTTZ/avalon/settings/pages)。在 **Build and deployment → Source** 选择 **GitHub Actions**。
