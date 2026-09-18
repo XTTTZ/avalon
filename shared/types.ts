@@ -53,6 +53,8 @@ export interface PublicEvent {
   id: number;
   text: string;
   at: number;
+  // Stable player references let each viewer render their own private nicknames.
+  parts?: (string | { playerId: string; name: string })[];
 }
 export interface PublicRoom {
   code: string;
@@ -62,6 +64,8 @@ export interface PublicRoom {
   phase: Phase;
   hostId: string;
   players: PublicPlayer[];
+  departedPlayers?: PublicPlayer[];
+  orderCustomized?: boolean;
   config: GameConfig;
   leaderId: string | null;
   leaderMode: LeaderMode;
@@ -126,7 +130,7 @@ export type GameCommand =
   | { type: 'lady'; targetId: string }
   | { type: 'assassinate'; targetId: string }
   | { type: 'transferHost'; targetId: string }
-  | { type: 'kick'; targetId: string }
+  | { type: 'kick'; targetId: string; endGame?: boolean }
   | { type: 'leave' }
   | { type: 'abort' }
   | { type: 'rematch' };
@@ -144,7 +148,7 @@ export type ApiRequest =
   | { action: 'session' }
   | { action: 'create'; name: string; config: GameConfig; requestId: string }
   | { action: 'join'; code: string; name: string; requestId: string }
-  | { action: 'get'; code: string; version?: number }
+  | { action: 'get'; code: string; version?: number; gameId?: string }
   | {
       action: 'command';
       code: string;

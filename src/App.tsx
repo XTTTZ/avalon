@@ -16,6 +16,8 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  RefreshCw,
+  UserRoundMinus,
   ScrollText,
   Settings2,
   Share2,
@@ -28,19 +30,14 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useGame } from './api';
-import type {
-  GameCommand,
-  GameConfig,
-  Notes,
-  PublicPlayer,
-  PublicRoom,
-  RoomView,
-} from '../shared/types';
+import type { GameCommand, GameConfig, PublicPlayer, PublicRoom, RoomView } from '../shared/types';
 import { LANCELOT_RULES, ROLE_META, standardConfig } from '../shared/rules';
 import { RulesEditor, RulesSummary } from './components/RulesEditor';
 import { SecretPanel } from './components/SecretPanel';
+import { AssassinationPanel } from './components/AssassinationPanel';
+import { eventText, playerName } from './player-names';
 import { NotesPanel } from './components/NotesPanel';
-import { AssignLeader, LeaderOrder, SeatOrderEditor } from './components/LeaderOrder';
+import { PlayerSeats } from './components/PlayerSeats';
 import './styles.css';
 
 type Tab = 'table' | 'identity' | 'notes' | 'history';
@@ -177,126 +174,16 @@ function QuestTrack({ room }: { room: PublicRoom }) {
             key={index}
           >
             <span className="quest-round">第 {index + 1} 轮</span>
-            <span className="quest-token">
+            <span
+              className="quest-token"
+              aria-label={`${quest.size} 人${result ? (result.passed ? '，成功' : '，失败') : ''}`}
+            >
               {result ? result.passed ? <Check size={22} /> : <X size={21} /> : quest.size}
             </span>
-            <span className="quest-detail">
-              {result ? (result.passed ? '成功' : '失败') : `${quest.size} 人`}
-            </span>
-            <span className="quest-threshold">
-              {quest.failsRequired > 1
-                ? `≥${quest.failsRequired} 失败票`
-                : current
-                  ? '本轮任务'
-                  : '≥1 失败票'}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function PlayerSeats({
-  room,
-  selfId,
-  selection,
-  onSelect,
-  disabled,
-  onManage,
-  notes = {},
-}: {
-  notes?: Notes;
-  room: PublicRoom;
-  selfId: string;
-  selection?: string[];
-  onSelect?: (id: string) => void;
-  disabled?: boolean;
-  onManage?: (p: PublicPlayer) => void;
-}) {
-  const count =
-    room.phase === 'lobby'
-      ? Math.max(room.config.playerCount, room.players.length)
-      : room.players.length;
-  return (
-    <div className="players-grid">
-      {Array.from({ length: count }, (_, index) => {
-        const player = room.players[index];
-        if (!player)
-          return (
-            <div className="player-seat empty-seat" key={`empty-${index}`}>
-              <span className="avatar">
-                <Plus size={19} strokeWidth={1.2} />
-              </span>
-              <span className="player-name">空位</span>
-              <small>等待朋友</small>
-            </div>
-          );
-        const nickname = notes[player.id]?.nickname;
-        const selected = selection?.includes(player.id) ?? room.proposedTeam.includes(player.id);
-        const leader = room.leaderId === player.id;
-        const revealed = room.revealedRoles.find((r) => r.playerId === player.id);
-        const contents = (
-          <>
-            <div className={`avatar ${selected ? 'selected-avatar' : ''}`}>
-              <span>{player.name.slice(0, 1)}</span>
-              {leader && (
-                <span className="leader-marker">
-                  <Crown size={11} />
-                </span>
-              )}
-              {onSelect && selected && (
-                <span className="selected-marker">
-                  <Check size={10} />
-                </span>
-              )}
-            </div>
-            <span className="player-name">
-              {nickname || player.name}
-              {selfId === player.id && <em>我</em>}
-            </span>
-            {nickname && <small className="public-name">{player.name}</small>}
-            <small>
-              {revealed
-                ? ROLE_META[revealed.role].name
-                : room.phase === 'reveal'
-                  ? room.readyIds.includes(player.id)
-                    ? '已准备'
-                    : '确认身份中'
-                  : room.phase === 'teamVote'
-                    ? room.teamVotedIds.includes(player.id)
-                      ? '已投票'
-                      : '等待投票'
-                    : leader
-                      ? '本轮队长'
-                      : room.hostId === player.id
-                        ? '房主'
-                        : `${player.seat + 1} 号玩家`}
-            </small>
-            {revealed && (
-              <span className={`reveal-alignment ${revealed.alignment}`}>
-                {revealed.alignment === 'good' ? '好人' : '坏人'}
-              </span>
+            {result && <span className="quest-detail">{result.passed ? '成功' : '失败'}</span>}
+            {quest.failsRequired > 1 && (
+              <span className="quest-threshold">≥{quest.failsRequired} 失败票</span>
             )}
-          </>
-        );
-        return onSelect || onManage ? (
-          <button
-            aria-label={`${player.seat + 1}号 ${player.name}${leader ? ' 队长' : ''}${selected ? ' 已选中' : ''}`}
-            aria-pressed={onSelect ? selected : undefined}
-            disabled={disabled}
-            className={`player-seat ${selected ? 'is-selected' : ''} ${selfId === player.id ? 'is-self' : ''}`}
-            key={player.id}
-            onClick={() => (onSelect ? onSelect(player.id) : onManage?.(player))}
-          >
-            {contents}
-          </button>
-        ) : (
-          <div
-            className={`player-seat ${selected ? 'is-selected' : ''} ${selfId === player.id ? 'is-self' : ''}`}
-            key={player.id}
-          >
-            {contents}
           </div>
         );
       })}
@@ -469,7 +356,8 @@ function PublicActions({
   selection,
   setSelection,
   confirm,
-  onAssignLeader,
+  onSort,
+  displayName,
 }: {
   view: RoomView;
   busy: boolean;
@@ -478,11 +366,12 @@ function PublicActions({
   selection: string[];
   setSelection: (ids: string[]) => void;
   confirm: (title: string, message: string, action: () => Promise<void>) => void;
-  onAssignLeader: () => void;
+  onSort: () => void;
+  displayName: (id: string) => string;
 }) {
   const { room, self } = view;
   const isHost = room.hostId === self.playerId;
-  const name = (id: string | null) => room.players.find((p) => p.id === id)?.name ?? '玩家';
+  const name = (id: string | null) => (id ? displayName(id) : '玩家');
   const quest = room.config.quests[room.round - 1];
   if (room.phase === 'lobby')
     return (
@@ -536,7 +425,7 @@ function PublicActions({
         <div className="action-copy">
           <h3>
             {!room.leaderId
-              ? '等待房主指定队长'
+              ? '等待房主调整带队顺序'
               : room.leaderId === self.playerId
                 ? '请选择队员'
                 : `等待 ${name(room.leaderId)} 组队`}
@@ -548,8 +437,8 @@ function PublicActions({
           </p>
         </div>
         {!room.leaderId && isHost && (
-          <button className="button primary" onClick={onAssignLeader}>
-            指定队长
+          <button className="button primary" onClick={onSort}>
+            调整顺序
           </button>
         )}
         {room.leaderId === self.playerId && (
@@ -671,7 +560,7 @@ function PublicActions({
                       key={player.id}
                       onClick={() => setSelection([player.id])}
                     >
-                      {player.name}
+                      {name(player.id)}
                     </button>
                   ))}
               </div>
@@ -693,19 +582,15 @@ function PublicActions({
     );
   if (room.phase === 'assassination')
     return (
-      <div className="action-panel">
-        <div className="action-icon">
-          <Swords size={24} />
-        </div>
-        <div className="action-copy">
-          <h3>等待刺客行动</h3>
-          <p>刺客请在「我的身份」选择刺杀目标。</p>
-        </div>
-        <button className="button primary" onClick={() => setTab('identity')}>
-          我的身份 <ArrowRight size={16} />
-        </button>
-      </div>
+      <AssassinationPanel
+        view={view}
+        busy={busy}
+        command={command}
+        confirm={confirm}
+        displayName={displayName}
+      />
     );
+
   return (
     <div className={`finish-banner ${room.winner ?? 'aborted'}`}>
       <h2>
@@ -730,8 +615,13 @@ function PublicActions({
   );
 }
 
-function History({ room }: { room: PublicRoom }) {
-  const name = (id: string) => room.players.find((p) => p.id === id)?.name ?? '玩家';
+function History({
+  room,
+  displayName: name,
+}: {
+  room: PublicRoom;
+  displayName: (id: string, fallback?: string) => string;
+}) {
   return (
     <div>
       <div className="section-heading">
@@ -757,7 +647,7 @@ function History({ room }: { room: PublicRoom }) {
                   {quest.passed ? '成功' : '失败'}
                 </span>
               </div>
-              <p>{quest.team.map(name).join(' · ')}</p>
+              <p>{quest.team.map((id) => name(id)).join(' · ')}</p>
               <div className="vote-totals">
                 <span>
                   <i className="dot good" />
@@ -783,7 +673,7 @@ function History({ room }: { room: PublicRoom }) {
                     第 {vote.round} 轮 · 第 {vote.attempt} 次提名
                   </strong>
                   <small>
-                    队长 {name(vote.leaderId)} · {vote.team.map(name).join('、')}
+                    队长 {name(vote.leaderId)} · {vote.team.map((id) => name(id)).join('、')}
                   </small>
                 </span>
                 <span className={`result-badge ${vote.approved ? 'good' : 'evil'}`}>
@@ -809,7 +699,7 @@ function History({ room }: { room: PublicRoom }) {
             <li key={event.id}>
               <span className="event-dot" />
               <div>
-                <p>{event.text}</p>
+                <p>{eventText(event, room.players, name)}</p>
                 <time>
                   {new Date(event.at).toLocaleTimeString('zh-CN', {
                     hour: '2-digit',
@@ -829,11 +719,13 @@ export default function App() {
   const game = useGame();
   const [tab, setTab] = useState<Tab>('table');
   const [selection, setSelection] = useState<string[]>([]);
-  const [dialog, setDialog] = useState<
-    'share' | 'rules' | 'help' | 'manage' | 'order' | 'leader' | null
-  >(null);
+  const [dialog, setDialog] = useState<'share' | 'rules' | 'help' | 'manage' | 'players' | null>(
+    null,
+  );
   const [confirmState, setConfirmState] = useState<Confirmation | null>(null);
   const [managing, setManaging] = useState<PublicPlayer | null>(null);
+  const [sortOrder, setSortOrder] = useState<string[] | null>(null);
+  const [sortError, setSortError] = useState('');
   const [rename, setRename] = useState('');
   const [copied, setCopied] = useState('');
   const [copyFailure, setCopyFailure] = useState(false);
@@ -849,9 +741,44 @@ export default function App() {
   }, [game.pending]);
   const view = game.view;
   const room = view?.room;
+  const displayName = (id: string, fallback?: string) =>
+    playerName(
+      [...(room?.players ?? []), ...(room?.departedPlayers ?? [])],
+      game.notes,
+      id,
+      fallback,
+    );
   const self = view?.self;
   const isHost = room?.hostId === self?.playerId;
   const canChangeOrder = room && room.phase !== 'finished' && room.phase !== 'assassination';
+  const sortingBase = useRef('');
+  const playersKey = room?.players.map((player) => player.id).join(',') ?? '';
+  useEffect(() => {
+    if (sortOrder && (!isHost || !canChangeOrder || playersKey !== sortingBase.current)) {
+      setSortOrder(null);
+      setSortError(playersKey !== sortingBase.current ? '玩家或顺序已更新，请重新排序。' : '');
+    }
+  }, [isHost, canChangeOrder, playersKey, sortOrder]);
+  const beginSorting = () => {
+    if (!room || !isHost || !canChangeOrder) return;
+    setTab('table');
+    sortingBase.current = playersKey;
+    setSortError('');
+    setSortOrder(room.players.map((player) => player.id));
+    requestAnimationFrame(() =>
+      document
+        .querySelector('.player-board')
+        ?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+    );
+  };
+  const saveOrder = async () => {
+    if (!sortOrder) return;
+    const saved = await game.command({ type: 'reorder', playerIds: sortOrder, mode: 'rotation' });
+    if (saved) {
+      setSortOrder(null);
+      setSortError('');
+    } else setSortError('顺序未保存，请重试。');
+  };
   const command = async (action: GameCommand) => {
     try {
       await game.command(action);
@@ -879,11 +806,24 @@ export default function App() {
   }, []);
   useEffect(() => {
     setTab('table');
+    setSortOrder(null);
     setDialog(null);
     setConfirmState(null);
   }, [room?.code, room?.gameId]);
   const confirm = (title: string, message: string, action: () => Promise<void>) =>
     setConfirmState({ title, message, action });
+  const removePlayer = (target: PublicPlayer) => {
+    if (!room || !isHost || target.id === self?.playerId) return;
+    setDialog(null);
+    const active = room.phase !== 'lobby' && room.phase !== 'finished';
+    confirm(
+      active ? '结束本局并移除玩家？' : '移除玩家？',
+      active
+        ? `本局将结束并公开所有身份，然后移除「${displayName(target.id)}」，无法撤回。`
+        : `将「${displayName(target.id)}」移出房间。`,
+      () => command({ type: 'kick', targetId: target.id, ...(active ? { endGame: true } : {}) }),
+    );
+  };
   const shareUrl = room
     ? `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(room.code)}`
     : '';
@@ -980,7 +920,7 @@ export default function App() {
                   ? '网络暂时断开，座位和已提交的选择会保留。'
                   : '正在重新连接，恢复最新圆桌状态…'}
               </span>
-              <button onClick={() => void game.refresh()}>重连</button>
+              <button onClick={() => void game.refreshNow()}>重连</button>
             </div>
           )}
           {game.pending && (
@@ -1027,6 +967,16 @@ export default function App() {
                 </h1>
               </div>
               <div className="room-heading-meta">
+                <button
+                  className="text-button refresh-button"
+                  disabled={game.refreshing}
+                  onClick={() => void game.refreshNow()}
+                  aria-label="刷新游戏状态"
+                  aria-busy={game.refreshing}
+                >
+                  <RefreshCw size={17} className={game.refreshing ? 'spinning' : ''} />
+                  {game.refreshing ? '刷新中' : '刷新'}
+                </button>
                 <span className="pill">
                   <Users size={13} />
                   {room!.players.length} / {room!.config.playerCount} 人
@@ -1039,13 +989,14 @@ export default function App() {
             <div hidden={tab !== 'table'} className="table-page">
               <PublicActions
                 view={view}
-                busy={busy}
+                busy={busy || Boolean(sortOrder)}
                 command={command}
                 setTab={setTab}
                 selection={selection}
                 setSelection={setSelection}
                 confirm={confirm}
-                onAssignLeader={() => setDialog('leader')}
+                onSort={beginSorting}
+                displayName={displayName}
               />
               <div className="card mission-board">
                 <div className="subheading">
@@ -1086,50 +1037,94 @@ export default function App() {
                       <Users size={18} />
                       玩家
                     </h2>
-                    {canChangeOrder && (
-                      <div className="player-tools">
-                        {isHost && (
-                          <button
-                            className="text-button"
-                            onClick={() => setDialog('order')}
-                            aria-label="调整带队顺序"
-                          >
-                            排序
-                          </button>
-                        )}
-                        {room!.phase === 'lobby' ? (
-                          <button className="text-button" onClick={() => setDialog('share')}>
-                            <Plus size={14} />
-                            邀请好友
-                          </button>
-                        ) : (
-                          isHost && (
-                            <button className="text-button" onClick={() => setDialog('leader')}>
-                              指定队长
-                            </button>
-                          )
-                        )}
-                      </div>
-                    )}
+                    <div className="player-tools">
+                      {isHost && canChangeOrder && !sortOrder && (
+                        <button
+                          className="text-button"
+                          onClick={beginSorting}
+                          aria-label="调整带队顺序"
+                        >
+                          排序
+                        </button>
+                      )}
+                      {isHost && !sortOrder && (
+                        <button
+                          className="text-button"
+                          onClick={() => setDialog('players')}
+                          aria-label="踢人"
+                        >
+                          踢人
+                        </button>
+                      )}
+                      {room!.phase === 'lobby' && !sortOrder && (
+                        <button
+                          className="text-button"
+                          onClick={() => setDialog('share')}
+                          aria-label="邀请好友"
+                        >
+                          邀请
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <LeaderOrder room={room!} />
+                  {sortOrder ? (
+                    <div className="sort-toolbar">
+                      <span>
+                        {room!.phase === 'lobby'
+                          ? '拖动玩家卡，按顺序带队'
+                          : '拖动排序，当前队长不变'}
+                      </span>
+                      <div>
+                        <button
+                          className="text-button"
+                          disabled={busy}
+                          onClick={() => {
+                            setSortOrder(null);
+                            setSortError('');
+                          }}
+                        >
+                          取消
+                        </button>
+                        <button
+                          className="button primary"
+                          disabled={busy}
+                          onClick={() => void saveOrder()}
+                        >
+                          保存顺序
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="seat-order-hint">
+                      {room!.phase === 'lobby'
+                        ? '开局随机排序和发身份'
+                        : '按玩家卡从左到右循环带队'}
+                    </p>
+                  )}
+                  {sortError && (
+                    <p className="error-box" role="alert">
+                      {sortError}
+                    </p>
+                  )}
                   <PlayerSeats
                     room={room!}
                     selfId={self!.playerId}
-                    notes={game.notes}
+                    displayName={displayName}
+                    sortOrder={sortOrder}
+                    onOrderChange={setSortOrder}
                     selection={
-                      room!.phase === 'team' && room!.leaderId === self!.playerId
+                      room!.phase === 'team' && room!.leaderId === self!.playerId && !sortOrder
                         ? selection
                         : undefined
                     }
                     onSelect={
-                      room!.phase === 'team' && room!.leaderId === self!.playerId
+                      room!.phase === 'team' && room!.leaderId === self!.playerId && !sortOrder
                         ? toggleSelection
                         : undefined
                     }
                     disabled={busy}
                     onManage={
-                      room!.phase === 'lobby'
+                      !sortOrder
                         ? (player) => {
                             setManaging(player);
                             setRename(player.name);
@@ -1138,12 +1133,22 @@ export default function App() {
                         : undefined
                     }
                   />
+                  {room!.phase === 'finished' &&
+                    (room!.departedPlayers ?? []).map((player) => {
+                      const role = room!.revealedRoles.find(
+                        (entry) => entry.playerId === player.id,
+                      );
+                      return (
+                        <p className="departed-player" key={player.id}>
+                          {displayName(player.id)} · 已移除
+                          {role ? ` · ${ROLE_META[role.role].name}` : ''}
+                        </p>
+                      );
+                    })}
                   {room!.ladyHolderId && (
                     <div className="lady-holder">
                       <Sparkles size={14} />
-                      <span>
-                        湖中仙女 · {room!.players.find((p) => p.id === room!.ladyHolderId)?.name}
-                      </span>
+                      <span>湖中仙女 · {displayName(room!.ladyHolderId)}</span>
                     </div>
                   )}
                   {room!.lancelotChanges.length > 0 && (
@@ -1206,11 +1211,13 @@ export default function App() {
               </div>
             </div>
             {tab === 'identity' && (
-              <SecretPanel view={view} busy={busy} command={command} confirm={confirm} />
+              <SecretPanel view={view} busy={busy} command={command} displayName={displayName} />
             )}
             <div hidden={tab !== 'notes'}>
               <NotesPanel
-                players={room!.players}
+                key={`${room!.createdAt}:${self!.playerId}`}
+                players={[...room!.players, ...(room!.departedPlayers ?? [])]}
+                departedIds={room!.departedPlayers?.map((player) => player.id)}
                 selfId={self!.playerId}
                 notes={game.notes}
                 revision={game.notesRevision}
@@ -1219,7 +1226,7 @@ export default function App() {
                 save={game.saveNotes}
               />
             </div>
-            {tab === 'history' && <History room={room!} />}
+            {tab === 'history' && <History room={room!} displayName={displayName} />}
           </main>
           <nav className="bottom-nav" aria-label="主要功能">
             {(
@@ -1290,46 +1297,33 @@ export default function App() {
           />
         </Modal>
       )}
-      {dialog === 'order' && room && canChangeOrder && isHost && (
-        <Modal title="调整带队顺序" onClose={() => setDialog(null)}>
-          <SeatOrderEditor
-            players={room.players}
-            busy={busy}
-            mode={room.leaderMode ?? 'rotation'}
-            inGame={room.phase !== 'lobby'}
-            onCancel={() => setDialog(null)}
-            onSave={async (playerIds, mode) => {
-              const saved = await game.command({ type: 'reorder', playerIds, mode });
-              if (saved) setDialog(null);
-              return saved;
-            }}
-            onShuffle={async (mode) => {
-              const saved = await game.command({ type: 'shuffleSeats', mode });
-              if (saved) setDialog(null);
-              return saved;
-            }}
-          />
-        </Modal>
-      )}
-      {dialog === 'leader' && room && canChangeOrder && room.phase !== 'lobby' && isHost && (
-        <Modal title="指定队长" onClose={() => setDialog(null)}>
-          <AssignLeader
-            key={room.phaseKey}
-            room={room}
-            busy={busy}
-            command={async (action) => {
-              const saved = await game.command(action);
-              if (saved) setDialog(null);
-              return saved;
-            }}
-          />
+      {dialog === 'players' && room && isHost && (
+        <Modal title="移除玩家" onClose={() => setDialog(null)}>
+          <div className="remove-player-list">
+            {room.players
+              .filter((player) => player.id !== self!.playerId)
+              .map((player) => (
+                <button
+                  className="button secondary"
+                  key={player.id}
+                  disabled={busy}
+                  onClick={() => removePlayer(player)}
+                >
+                  <span>
+                    {player.seat + 1}. {displayName(player.id)}
+                  </span>
+                  <UserRoundMinus size={18} />
+                </button>
+              ))}
+            {room.players.length === 1 && <p className="muted">没有可移除的玩家</p>}
+          </div>
         </Modal>
       )}
       {dialog === 'manage' && managing && room && (
         <Modal title="玩家" onClose={() => setDialog(null)}>
           <div className="manage-content">
-            <span className="avatar">{managing.name.slice(0, 1)}</span>
-            <h2>{managing.name}</h2>
+            <span className="avatar">{Array.from(displayName(managing.id))[0]}</span>
+            <h2>{displayName(managing.id)}</h2>
             <p className="muted">
               {managing.seat + 1} 号玩家{managing.id === room.hostId ? ' · 房主' : ''}
             </p>
@@ -1372,33 +1366,32 @@ export default function App() {
                 私人笔记
               </button>
             )}
-            {isHost && room.phase === 'lobby' && managing.id !== self!.playerId && (
+            {isHost && managing.id !== self!.playerId && (
               <div className="manage-host-actions">
-                <button
-                  className="text-button"
-                  disabled={busy}
-                  onClick={() => {
-                    setDialog(null);
-                    confirm('转交房主？', `将房主权限转交给「${managing.name}」。`, () =>
-                      command({ type: 'transferHost', targetId: managing.id }),
-                    );
-                  }}
-                >
-                  <Crown size={15} />
-                  转交房主
-                </button>
+                {room.phase === 'lobby' && (
+                  <button
+                    className="text-button"
+                    disabled={busy}
+                    onClick={() => {
+                      setDialog(null);
+                      confirm(
+                        '转交房主？',
+                        `将房主权限转交给「${displayName(managing.id)}」。`,
+                        () => command({ type: 'transferHost', targetId: managing.id }),
+                      );
+                    }}
+                  >
+                    <Crown size={15} />
+                    转交房主
+                  </button>
+                )}
                 <button
                   className="text-button danger-text"
                   disabled={busy}
-                  onClick={() => {
-                    setDialog(null);
-                    confirm('移除玩家？', `将「${managing.name}」移出大厅。`, () =>
-                      command({ type: 'kick', targetId: managing.id }),
-                    );
-                  }}
+                  onClick={() => removePlayer(managing)}
                 >
                   <DoorOpen size={15} />
-                  移出大厅
+                  移除玩家
                 </button>
               </div>
             )}

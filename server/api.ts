@@ -23,6 +23,7 @@ import {
 } from './auth.js';
 import type { Transaction } from './store.js';
 import { randomRoomCode } from './room-code.js';
+import { noteMatchesRoom } from './room-lifecycle.js';
 
 interface CommandReceipt {
   id: string;
@@ -37,6 +38,8 @@ export interface RoomRecord {
 }
 interface NoteRecord extends NotesResult {
   expiresAt: number;
+  roomInstanceId?: string;
+  roomCreatedAt?: number;
 }
 function invalid(message = '请求参数无效'): never {
   throw new GameError('INVALID', message);
@@ -75,7 +78,7 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
     session: [],
     create: ['name', 'config', 'requestId'],
     join: ['code', 'name', 'requestId'],
-    get: ['code', 'version'],
+    get: ['code', 'version', 'gameId'],
     command: ['code', 'command', 'expectedVersion', 'phaseKey', 'requestId'],
     'notes.get': ['code'],
     'notes.save': ['code', 'notes', 'expectedRevision'],
@@ -87,7 +90,7 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
     roomCode(request.code);
   if (['create', 'join', 'command'].includes(request.action)) requestId(request.requestId);
   if (request.action === 'create' || request.action === 'join') {
-    if (typeof request.name !== 'string' || !request.name.trim() || request.name.length > 24)
+    if (typeof request.name !== 'string' || !request.name.trim() || request.name.length > 256)
       invalid('名字须为 1–24 个字符');
   }
   if (request.action === 'create') validateConfig(request.config as GameConfig);
@@ -95,6 +98,12 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
     request.action === 'get' &&
     request.version !== undefined &&
     (!Number.isSafeInteger(request.version) || Number(request.version) < 0)
+  )
+    invalid();
+  if (
+    request.action === 'get' &&
+    request.gameId !== undefined &&
+    (typeof request.gameId !== 'string' || request.gameId.length > 100)
   )
     invalid();
   if (request.action === 'command') {
@@ -120,7 +129,7 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
       lady: ['targetId'],
       assassinate: ['targetId'],
       transferHost: ['targetId'],
-      kick: ['targetId'],
+      kick: ['targetId', 'endGame'],
       leave: [],
       abort: [],
       rematch: [],
@@ -188,12 +197,18 @@ async function notesRoom(
   member(record.state, userId);
   return record;
 }
+function isNoteTarget(room: RoomState, id: string): boolean {
+  return (
+    room.players.some((player) => player.id === id) ||
+    (room.phase === 'finished' && (room.departedPlayers ?? []).some((player) => player.id === id))
+  );
+}
 function validateNotes(notes: unknown, room: RoomState, previous: Notes = {}): Notes {
   object(notes);
   if (Object.keys(notes).length > 12) invalid('笔记数量超出限制');
   const output: Notes = {};
   for (const [targetId, value] of Object.entries(notes)) {
-    if (!room.players.some((player) => player.id === targetId)) {
+    if (!isNoteTarget(room, targetId)) {
       // A lobby kick may race the owner's editor. Prune their previously saved
       // target without making all other notes impossible to save.
       if (Object.hasOwn(previous, targetId)) continue;
@@ -248,7 +263,9 @@ export async function handleApi(
     // Normal polling costs exactly one database document read and no writes.
     const record = active(await deps.store.get<RoomRecord>('rooms', request.code), now);
     member(record.state, userId);
-    if (request.version === record.state.version)
+    // A recycled four-digit code can have the same version in a different game.
+    // Legacy clients without a game ID receive the full authorized view.
+    if (request.version === record.state.version && request.gameId === record.state.gameId)
       return { unchanged: true, version: record.state.version };
     return projectRoom(record.state, userId);
   }
@@ -314,15 +331,18 @@ export async function handleApi(
   }
   if (request.action === 'command') {
     return deps.store.transaction(async (transaction) => {
-      const record = active(await transaction.get<RoomRecord>('rooms', request.code), now);
+      const stored = await transaction.get<RoomRecord>('rooms', request.code);
       const hash = digest(request);
-      const receipt = record.receipts.find(
+      const receipt = stored?.receipts.find(
         (receipt) => receipt.id === request.requestId && receipt.userId === userId,
       );
       if (receipt) {
         if (receipt.digest !== hash)
           throw new GameError('CONFLICT', '同一请求编号不能用于不同操作');
         if (receipt.left) return { left: true } as const;
+      }
+      const record = active(stored, now);
+      if (receipt) {
         member(record.state, userId);
         return projectRoom(record.state, userId);
       }
@@ -355,12 +375,10 @@ export async function handleApi(
   if (request.action === 'notes.get') {
     const room = await notesRoom(deps.store, request.code, userId, now);
     const record = await deps.store.get<NoteRecord>('notes', `${request.code}_${userId}`);
-    return record && record.expiresAt > now
+    return record && noteMatchesRoom(record, room.state)
       ? {
           notes: Object.fromEntries(
-            Object.entries(record.notes).filter(([id]) =>
-              room.state.players.some((player) => player.id === id),
-            ),
+            Object.entries(record.notes).filter(([id]) => isNoteTarget(room.state, id)),
           ),
           revision: record.revision,
         }
@@ -372,7 +390,7 @@ export async function handleApi(
       const room = await notesRoom(transaction, request.code, userId, now);
       const id = `${request.code}_${userId}`;
       const stored = await transaction.get<NoteRecord>('notes', id);
-      const existing = stored && stored.expiresAt > now ? stored : null;
+      const existing = stored && noteMatchesRoom(stored, room.state) ? stored : null;
       if ((existing?.revision ?? 0) !== request.expectedRevision)
         throw new GameError('CONFLICT', '笔记已在其他页面更新，请重新载入');
       // Notes share the room's persistent write limiter without changing its game version.
@@ -381,6 +399,8 @@ export async function handleApi(
         notes: validateNotes(request.notes, room.state, existing?.notes),
         revision: (existing?.revision ?? 0) + 1,
         expiresAt: room.state.expiresAt,
+        ...(room.state.instanceId ? { roomInstanceId: room.state.instanceId } : {}),
+        roomCreatedAt: room.state.createdAt,
       };
       await transaction.set('rooms', request.code, room, room.state.expiresAt);
       await transaction.set('notes', id, result, result.expiresAt);

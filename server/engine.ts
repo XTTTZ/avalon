@@ -55,6 +55,12 @@ export interface RoomState {
   assassinationTargetId: string | null;
   events: PublicEvent[];
   createdAt: number;
+  orderCustomized?: boolean;
+  departedPlayers?: { id: string; name: string; seat: number }[];
+  // Stable across rematches; unlike a reusable room code or per-game ID.
+  instanceId?: string;
+  // Absent in legacy rooms; reads preserve their existing expiration deadline.
+  lastActiveAt?: number;
   expiresAt: number;
   secrets: Record<string, PlayerSecret>;
   teamBallots: Record<string, boolean>;
@@ -63,7 +69,7 @@ export interface RoomState {
 }
 
 type Actor = { userId: string; name: string };
-const ROOM_LIFETIME = 7 * 24 * 60 * 60 * 1000;
+const DAY = 24 * 60 * 60 * 1000;
 const MAX_EVENTS = 160;
 function fail(code: ConstructorParameters<typeof GameError>[0], message: string): never {
   throw new GameError(code, message);
@@ -85,13 +91,27 @@ function shuffle<T>(items: readonly T[]): T[] {
 }
 function nameOf(name: unknown): string {
   ensure(typeof name === 'string', 'INVALID', '公开名字格式错误');
-  const clean = name.trim();
+  const clean = name.normalize('NFKC').trim();
   ensure(
     clean.length >= 1 && Array.from(clean).length <= 24 && !/[\p{Cc}\p{Cf}]/u.test(clean),
     'INVALID',
     '名字须为 1–24 个可见字符',
   );
-  return clean;
+  return clean.replace(/\s+/gu, ' ');
+}
+function uniqueName(room: RoomState, name: string, exceptId?: string) {
+  const key = (value: string) => value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+  ensure(
+    !room.players.some((player) => player.id !== exceptId && key(player.name) === key(name)),
+    'INVALID',
+    '这个名字已被使用，请换一个',
+  );
+}
+function recordActivity(room: RoomState, now: number) {
+  room.lastActiveAt = now;
+  room.expiresAt = !room.players.length
+    ? now
+    : now + (room.phase === 'lobby' || room.phase === 'finished' ? DAY : 2 * DAY);
 }
 function assertActor(actor: Actor) {
   ensure(
@@ -103,8 +123,25 @@ function assertActor(actor: Actor) {
     '请重新登录',
   );
 }
-function event(room: RoomState, text: string, now: number) {
-  room.events.push({ id: (room.events.at(-1)?.id ?? 0) + 1, text, at: now });
+function publicEvent(
+  content: string | (string | ServerPlayer)[],
+  id: number,
+  now: number,
+): PublicEvent {
+  if (typeof content === 'string') return { id, text: content, at: now };
+  // Explicit public fields only: never serialize the server player / user ID.
+  const parts = content.map((part) =>
+    typeof part === 'string' ? part : { playerId: part.id, name: part.name },
+  );
+  return {
+    id,
+    text: parts.map((part) => (typeof part === 'string' ? part : part.name)).join(''),
+    parts,
+    at: now,
+  };
+}
+function event(room: RoomState, content: string | (string | ServerPlayer)[], now: number) {
+  room.events.push(publicEvent(content, (room.events.at(-1)?.id ?? 0) + 1, now));
   if (room.events.length > MAX_EVENTS) room.events.splice(0, room.events.length - MAX_EVENTS);
 }
 function transition(room: RoomState, phase: Phase) {
@@ -129,6 +166,7 @@ function target(room: RoomState, targetId: unknown): ServerPlayer {
   return player;
 }
 function clearGame(room: RoomState) {
+  room.departedPlayers = [];
   room.leaderId = null;
   room.nextLeaderId = null;
   room.round = 0;
@@ -182,9 +220,11 @@ export function createRoom(
     winner: null,
     finishReason: null,
     assassinationTargetId: null,
-    events: [{ id: 1, text: `${player.name} 创建了房间`, at: now }],
+    events: [publicEvent([player, ' 创建了房间'], 1, now)],
     createdAt: now,
-    expiresAt: now + ROOM_LIFETIME,
+    instanceId: randomUUID(),
+    lastActiveAt: now,
+    expiresAt: now + DAY,
     secrets: {},
     teamBallots: {},
     questBallots: {},
@@ -205,10 +245,12 @@ export function joinRoom(source: RoomState, actor: Actor, now = Date.now()): Roo
     name: nameOf(actor.name),
     seat: room.players.length,
   };
+  uniqueName(room, player.name);
   room.players.push(player);
   if (room.players.length === 1) room.hostId = player.id;
-  event(room, `${player.name} 加入了房间`, now);
+  event(room, [player, ' 加入了房间'], now);
   room.version++;
+  recordActivity(room, now);
   return room;
 }
 
@@ -371,6 +413,7 @@ export function applyCommand(
     case 'rename': {
       const name = nameOf(command.name);
       if (name === player.name) return structuredClone(source);
+      uniqueName(room, name, player.id);
       player.name = name;
       break;
     }
@@ -396,10 +439,14 @@ export function applyCommand(
       const ordered = ids.map((id) => target(room, id));
       if (
         ordered.every((p, index) => p.id === room.players[index].id) &&
-        mode === (room.leaderMode ?? 'rotation')
+        mode === (room.leaderMode ?? 'rotation') &&
+        room.orderCustomized &&
+        !(mode === 'rotation' && room.nextLeaderId)
       )
         return structuredClone(source);
       room.leaderMode = mode;
+      room.orderCustomized = true;
+      if (mode === 'rotation') room.nextLeaderId = null;
       room.players = ordered;
       room.players.forEach((p, index) => {
         p.seat = index;
@@ -409,7 +456,7 @@ export function applyCommand(
         !room.leaderId &&
         (room.phase === 'team' || room.phase === 'reveal')
       ) {
-        room.leaderId = room.players[randomInt(room.players.length)].id;
+        room.leaderId = room.players[0].id;
         initializeLady(room);
         transition(room, room.phase);
       }
@@ -437,7 +484,7 @@ export function applyCommand(
         room.nextLeaderId = chosen?.id ?? null;
         event(
           room,
-          chosen ? `房主指定 ${chosen.name} 为下一任队长` : '房主取消了下一任队长指定',
+          chosen ? ['房主指定 ', chosen, ' 为下一任队长'] : '房主取消了下一任队长指定',
           now,
         );
       } else {
@@ -452,7 +499,7 @@ export function applyCommand(
         room.proposedTeam = [];
         initializeLady(room);
         transition(room, room.phase);
-        event(room, `房主指定 ${chosen.name} 为当前队长`, now);
+        event(room, ['房主指定 ', chosen, ' 为当前队长'], now);
       }
       break;
     }
@@ -467,13 +514,20 @@ export function applyCommand(
       );
       clearGame(room);
       room.gameId = randomUUID();
+      // Every new game gets fresh seat and role draws, even after manual seating.
+      // Never reuse a permutation for the roles: seats must reveal no role information.
+      room.players = shuffle(room.players);
+      room.players.forEach((p, index) => {
+        p.seat = index;
+      });
+      room.orderCustomized = false;
       assignSecrets(room);
       if (room.leaderMode !== 'manual') {
-        room.leaderId = room.players[randomInt(room.players.length)].id;
+        room.leaderId = room.players[0].id;
         initializeLady(room);
       }
       transition(room, 'reveal');
-      event(room, '已随机发身份；请各自查看并确认', now);
+      event(room, '已随机排列玩家并分配身份；请各自查看并确认', now);
       break;
     }
     case 'ready': {
@@ -501,7 +555,7 @@ export function applyCommand(
       room.proposedTeam = room.players.filter((p) => team.includes(p.id)).map((p) => p.id);
       room.teamBallots = {};
       transition(room, 'teamVote');
-      event(room, `${player.name} 提交了任务队伍，等待全员投票`, now);
+      event(room, [player, ' 提交了任务队伍，等待全员投票'], now);
       break;
     }
     case 'teamVote': {
@@ -566,7 +620,7 @@ export function applyCommand(
       });
       room.ladyHolderId = chosen.id;
       room.ladyHistory.push(chosen.id);
-      event(room, `${player.name} 查验了 ${chosen.name}；湖中仙女已交接`, now);
+      event(room, [player, ' 查验了 ', chosen, '；湖中仙女已交接'], now);
       nextRound(room, now);
       break;
     }
@@ -594,14 +648,26 @@ export function applyCommand(
     }
     case 'kick': {
       host(room, player);
-      requirePhase(room, 'lobby');
       const chosen = target(room, command.targetId);
       ensure(chosen.id !== player.id, 'INVALID', '请使用离开房间');
+      ensure(
+        command.endGame === undefined || typeof command.endGame === 'boolean',
+        'INVALID',
+        '结束本局选项无效',
+      );
+      if (room.phase !== 'lobby' && room.phase !== 'finished') {
+        ensure(command.endGame === true, 'CONFLICT', '请先确认结束本局再移除玩家');
+        finish(room, null, '房主结束本局并移除玩家；无获胜阵营', now);
+      }
+      if (room.phase === 'finished') {
+        room.departedPlayers ??= [];
+        room.departedPlayers.push({ id: chosen.id, name: chosen.name, seat: chosen.seat });
+      }
       room.players = room.players.filter((p) => p.id !== chosen.id);
       room.players.forEach((p, i) => {
         p.seat = i;
       });
-      event(room, `${chosen.name} 已被移出大厅`, now);
+      event(room, [chosen, room.phase === 'lobby' ? ' 已被移出大厅' : ' 已被移出房间'], now);
       break;
     }
     case 'leave': {
@@ -611,7 +677,7 @@ export function applyCommand(
         p.seat = i;
       });
       if (room.hostId === player.id) room.hostId = room.players[0]?.id ?? '';
-      event(room, `${player.name} 离开了房间`, now);
+      event(room, [player, ' 离开了房间'], now);
       break;
     }
     case 'abort': {
@@ -626,7 +692,6 @@ export function applyCommand(
       clearGame(room);
       room.gameId = randomUUID();
       room.events = [];
-      room.expiresAt = now + ROOM_LIFETIME;
       transition(room, 'lobby');
       event(room, '返回大厅，准备重新发身份', now);
       break;
@@ -634,6 +699,9 @@ export function applyCommand(
     default:
       fail('INVALID', '未知游戏操作');
   }
+  // Finished rooms expire a day after finishing, even if somebody keeps renaming.
+  // A rematch explicitly returns to the lobby and starts a fresh idle window.
+  if (source.phase !== 'finished' || room.phase !== 'finished') recordActivity(room, now);
   room.version++;
   return room;
 }
@@ -651,6 +719,8 @@ export function projectRoom(source: RoomState, userId: string): RoomView {
       phase: source.phase,
       hostId: source.hostId,
       players: source.players.map((p) => ({ id: p.id, name: p.name, seat: p.seat })),
+      departedPlayers: source.phase === 'finished' ? (source.departedPlayers ?? []) : [],
+      orderCustomized: source.orderCustomized ?? false,
       config: source.config,
       leaderId: source.leaderId,
       leaderMode: source.leaderMode ?? 'rotation',
@@ -671,7 +741,7 @@ export function projectRoom(source: RoomState, userId: string): RoomView {
       assassinationTargetId: source.assassinationTargetId,
       revealedRoles:
         source.phase === 'finished'
-          ? source.players.map((p) => ({
+          ? [...source.players, ...(source.departedPlayers ?? [])].map((p) => ({
               playerId: p.id,
               role: source.secrets[p.id].role,
               alignment: source.secrets[p.id].alignment,

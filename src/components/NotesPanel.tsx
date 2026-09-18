@@ -11,6 +11,7 @@ const blankNote = (): PlayerNote => ({
 });
 export function NotesPanel({
   players,
+  departedIds = [],
   selfId,
   notes,
   revision,
@@ -19,6 +20,7 @@ export function NotesPanel({
   save,
 }: {
   players: PublicPlayer[];
+  departedIds?: string[];
   selfId: string;
   notes: Notes;
   revision: number;
@@ -52,6 +54,8 @@ export function NotesPanel({
     return () => window.removeEventListener('beforeunload', prevent);
   }, [dirty]);
   const note = draft[selected] ?? blankNote();
+  const displayName = (id: string) =>
+    draft[id]?.nickname.trim() || players.find((player) => player.id === id)?.name || '玩家';
   const patch = (value: Partial<PlayerNote>) => {
     setDraft((current) => ({
       ...current,
@@ -107,11 +111,11 @@ export function NotesPanel({
                 key={player.id}
                 onClick={() => setSelected(player.id)}
               >
-                <span className="avatar mini">{player.name.slice(0, 1)}</span>
+                <span className="avatar mini">{Array.from(displayName(player.id))[0]}</span>
                 <span>
-                  {draft[player.id]?.nickname || player.name}
+                  {displayName(player.id)}
                   <small>
-                    {player.seat + 1} 号 · {player.name}
+                    {departedIds.includes(player.id) ? '已移除' : `${player.seat + 1} 号`}
                   </small>
                 </span>
                 {draft[player.id]?.text && <i className="note-dot" />}
@@ -120,7 +124,7 @@ export function NotesPanel({
         </div>
         <div className="card note-editor">
           <div className="subheading">
-            <h3>{players.find((p) => p.id === selected)?.name ?? '玩家'}</h3>
+            <h3>{displayName(selected)}</h3>
             <span className="small muted">{dirty ? '未保存' : saved ? '已保存' : ''}</span>
           </div>
           <label className="field">

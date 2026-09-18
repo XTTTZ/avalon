@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { retainedNoteExpiry, type ExpiringNote, type NoteRoom } from './room-lifecycle.js';
 
 export type Collection = 'rooms' | 'users' | 'notes' | 'oauth';
 export const COLLECTIONS: Collection[] = ['rooms', 'users', 'notes', 'oauth'];
@@ -98,9 +99,34 @@ export class FileStore implements Store {
       const expired = Object.entries(draft)
         .filter(([, d]) => d.expiresAt <= now)
         .slice(0, limit);
-      for (const [id] of expired) delete draft[id];
+      let deleted = 0;
+      for (const [id, document] of expired) {
+        if (id.startsWith('notes/')) {
+          const [code, ...userParts] = id.slice('notes/'.length).split('_');
+          const room = (draft[key('rooms', code)]?.value as { state?: NoteRoom } | undefined)
+            ?.state;
+          const expiresAt = retainedNoteExpiry(
+            document.value as ExpiringNote,
+            room,
+            userParts.join('_'),
+            now,
+          );
+          if (expiresAt !== null) {
+            document.expiresAt = expiresAt;
+            document.value = {
+              ...(document.value as Record<string, unknown>),
+              expiresAt,
+              ...(room!.instanceId ? { roomInstanceId: room!.instanceId } : {}),
+              roomCreatedAt: room!.createdAt,
+            };
+            continue;
+          }
+        }
+        delete draft[id];
+        deleted++;
+      }
       if (expired.length) await this.persist(draft);
-      return expired.length;
+      return deleted;
     });
   }
 }
@@ -184,6 +210,35 @@ export class CloudBaseStore implements Store {
           checkDatabaseResult(read);
           const current = Array.isArray(read.data) ? read.data[0] : read.data;
           if (current && Number(current.expiresAt) <= now) {
+            if (collection === 'notes') {
+              const [code, ...userParts] = document._id.split('_');
+              const parent = await this.adapter(transaction).get<{ state: NoteRoom }>(
+                'rooms',
+                code,
+              );
+              const expiresAt = retainedNoteExpiry(
+                current.value as unknown as ExpiringNote,
+                parent?.state,
+                userParts.join('_'),
+                now,
+              );
+              if (expiresAt !== null) {
+                checkDatabaseResult(
+                  await ref.set({
+                    value: {
+                      ...(current.value as Record<string, unknown>),
+                      expiresAt,
+                      ...(parent!.state.instanceId
+                        ? { roomInstanceId: parent!.state.instanceId }
+                        : {}),
+                      roomCreatedAt: parent!.state.createdAt,
+                    },
+                    expiresAt,
+                  }),
+                );
+                return false;
+              }
+            }
             if (ref.delete) checkDatabaseResult(await ref.delete());
             else checkDatabaseResult(await ref.remove!());
             return true;

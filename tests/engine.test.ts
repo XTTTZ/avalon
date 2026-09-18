@@ -183,6 +183,7 @@ describe('seat order and leader rotation', () => {
     const ids = room.players.map((p) => p.id);
     room = command(room, room.hostId, { type: 'reorder', playerIds: ids, mode: 'manual' });
     room = command(room, room.hostId, { type: 'start' });
+    const seats = room.players.map((player) => player.id);
     expect(room.leaderId).toBeNull();
     expect(room.ladyHolderId).toBeNull();
     for (const p of room.players) room = command(room, p.id, { type: 'ready' });
@@ -196,7 +197,8 @@ describe('seat order and leader rotation', () => {
       targetId: ids[2],
       timing: 'current',
     });
-    expect(room.ladyHolderId).toBe(ids[1]);
+    const ladyId = seats[(seats.indexOf(ids[2]) + seats.length - 1) % seats.length];
+    expect(room.ladyHolderId).toBe(ladyId);
     room = quest(room);
     expect(room.phase).toBe('team');
     expect(room.leaderId).toBeNull();
@@ -214,9 +216,12 @@ describe('seat order and leader rotation', () => {
     });
     room = quest(room);
     expect(room.phase).toBe('lady');
-    expect(room.ladyHolderId).toBe(ids[1]);
+    expect(room.ladyHolderId).toBe(ladyId);
     room = command(room, room.hostId, { type: 'assignLeader', targetId: ids[2], timing: 'next' });
-    room = command(room, room.ladyHolderId!, { type: 'lady', targetId: ids[0] });
+    room = command(room, room.ladyHolderId!, {
+      type: 'lady',
+      targetId: room.players.find((player) => !room.ladyHistory.includes(player.id))!.id,
+    });
     expect(room.leaderId).toBe(ids[2]); // Consecutive appointments are allowed.
     expect(room.nextLeaderId).toBeNull();
     room = command(room, room.hostId, { type: 'abort' });
@@ -275,7 +280,7 @@ describe('seat order and leader rotation', () => {
       rejectionLimit: 10,
       lady: true,
     });
-    const orderedIds = [2, 0, 4, 1, 3].map((index) => source.players[index].id);
+    let orderedIds = [2, 0, 4, 1, 3].map((index) => source.players[index].id);
     let room = command(source, source.hostId, { type: 'reorder', playerIds: orderedIds });
     expect(room.players.map((p) => p.id)).toEqual(orderedIds);
     expect(room.players.map((p) => p.seat)).toEqual([0, 1, 2, 3, 4]);
@@ -284,6 +289,7 @@ describe('seat order and leader rotation', () => {
       expect(room.players.find((p) => p.id === player.id)?.name).toBe(player.name);
     }
     room = command(room, room.hostId, { type: 'start' });
+    orderedIds = room.players.map((player) => player.id);
     for (const player of room.players) room = command(room, player.id, { type: 'ready' });
     const startIndex = orderedIds.indexOf(room.leaderId!);
     const cycle = [...orderedIds.slice(startIndex), ...orderedIds.slice(0, startIndex)];
@@ -324,7 +330,7 @@ describe('seat order and leader rotation', () => {
     expect(room.players.slice(0, -1).map((p) => p.id)).toEqual(remaining);
     const circle = room.players.map((p) => p.id);
     room = command(room, room.hostId, { type: 'start' });
-    expect(room.players.map((p) => p.id)).toEqual(circle);
+    expect(room.players.map((p) => p.id).sort()).toEqual([...circle].sort());
   });
 });
 
@@ -696,5 +702,53 @@ describe('secrets, optional modules and rematch', () => {
     expect(view(room, room.hostId).room.revealedRoles).toEqual([]);
     room = command(room, room.hostId, { type: 'start' });
     expect(room.phase).toBe('reveal');
+  });
+});
+
+describe('card order and host removals', () => {
+  it('starts a random full circle at its first card and rotates without reshuffling', () => {
+    const lobby = fullRoom();
+    let room = command(lobby, lobby.hostId, { type: 'start' });
+    const order = room.players.map((player) => player.id);
+    expect([...order].sort()).toEqual(lobby.players.map((player) => player.id).sort());
+    expect(room.players.map((player) => player.seat)).toEqual([0, 1, 2, 3, 4]);
+    expect(room.leaderId).toBe(order[0]);
+    for (const player of room.players) room = command(room, player.id, { type: 'ready' });
+    room = approveTeam(room);
+    for (const id of room.proposedTeam)
+      room = command(room, id, { type: 'questVote', success: true });
+    expect(room.leaderId).toBe(order[1]);
+    expect(room.players.map((player) => player.id)).toEqual(order);
+    expect(room.orderCustomized).not.toBe(true);
+  });
+
+  it('requires host confirmation to end a live game and preserves the removed identity only in the result', () => {
+    let room = start();
+    const removed = room.players.find((player) => player.id !== room.hostId)!;
+    const role = room.secrets[removed.id].role;
+    errorCode(
+      () => command(room, removed.id, { type: 'kick', targetId: room.hostId, endGame: true }),
+      'FORBIDDEN',
+    );
+    errorCode(
+      () => command(room, room.hostId, { type: 'kick', targetId: room.hostId, endGame: true }),
+      'INVALID',
+    );
+    errorCode(() => command(room, room.hostId, { type: 'kick', targetId: removed.id }), 'CONFLICT');
+    expect(view(room, room.hostId).room.departedPlayers).toEqual([]);
+    room = command(room, room.hostId, { type: 'kick', targetId: removed.id, endGame: true });
+    expect(room.phase).toBe('finished');
+    expect(room.winner).toBeNull();
+    expect(room.players).toHaveLength(4);
+    errorCode(() => projectRoom(room, removed.userId), 'FORBIDDEN');
+    const visible = view(room, room.hostId).room;
+    expect(visible.revealedRoles).toHaveLength(5);
+    expect(visible.revealedRoles.find((entry) => entry.playerId === removed.id)?.role).toBe(role);
+    expect(JSON.stringify(visible)).not.toContain(removed.userId);
+    room = command(room, room.hostId, { type: 'rematch' });
+    expect(room.departedPlayers).toEqual([]);
+    expect(room.players).toHaveLength(4);
+    expect(view(room, room.hostId).room.revealedRoles).toEqual([]);
+    errorCode(() => command(room, room.hostId, { type: 'start' }), 'CONFLICT');
   });
 });

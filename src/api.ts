@@ -180,6 +180,13 @@ async function authenticate(): Promise<Session> {
 
 type Connection = 'connecting' | 'online' | 'offline' | 'reconnecting';
 type PendingRequest = Extract<ApiRequest, { action: 'create' | 'join' | 'command' }>;
+function sameMembership(previous: RoomView | null, next: RoomView): boolean {
+  return (
+    previous?.room.code === next.room.code &&
+    previous.room.createdAt === next.room.createdAt &&
+    previous.self.playerId === next.self.playerId
+  );
+}
 export function useGame() {
   const [session, setSession] = useState<Session | null>(null);
   const [view, setView] = useState<RoomView | null>(null);
@@ -190,6 +197,8 @@ export function useGame() {
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] = useState<Connection>('connecting');
   const [pending, setPending] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
   const sessionRef = useRef<Session | null>(null);
   const viewRef = useRef<RoomView | null>(null);
   const pendingRef = useRef<PendingRequest | null>(null);
@@ -200,8 +209,8 @@ export function useGame() {
   const unchanged = useRef(0);
   const notesRevisionRef = useRef(0);
   const alive = useRef(true);
-  // Invalidate every pending response when the selected room changes, including
-  // leaving and rejoining the same room while an old request is still in flight.
+  // A recycled room code or a new seat is a new membership. Invalidate pending
+  // responses and private notes even when the visible room code stays the same.
   const scope = useRef(0);
 
   const rememberLastRoom = useCallback((code: string | null) => {
@@ -217,14 +226,12 @@ export function useGame() {
     (next: RoomView) => {
       if (!alive.current) return;
       const previous = viewRef.current;
-      if (
-        previous?.room.code === next.room.code &&
-        previous.room.createdAt === next.room.createdAt &&
-        previous.room.version > next.room.version
-      )
-        return;
-      if (previous?.room.code !== next.room.code) {
+      const sameMember = sameMembership(previous, next);
+      if (sameMember && previous!.room.version > next.room.version) return;
+      if (!sameMember) {
         scope.current++;
+        pendingRef.current = null;
+        setPending(false);
         setNotes({});
         setNotesRevision(0);
         notesRevisionRef.current = 0;
@@ -352,7 +359,12 @@ export function useGame() {
     const requestScope = scope.current;
     try {
       const result = await apiCall<RoomView | { unchanged: true; version: number }>(
-        { action: 'get', code: previous.room.code, version: previous.room.version },
+        {
+          action: 'get',
+          code: previous.room.code,
+          version: previous.room.version,
+          gameId: previous.room.gameId,
+        },
         current.token,
       );
       if (
@@ -364,7 +376,12 @@ export function useGame() {
       if ('unchanged' in result) unchanged.current += 1;
       else {
         unchanged.current = 0;
+        const changedMembership = !sameMembership(viewRef.current, result);
         acceptView(result);
+        if (changedMembership)
+          await loadNotes(result.room.code, current.token).catch((err) => {
+            if (alive.current && sameMembership(viewRef.current, result)) markError(err);
+          });
       }
       failures.current = 0;
       setConnection('online');
@@ -388,12 +405,47 @@ export function useGame() {
     } finally {
       pollingRef.current = false;
     }
-  }, [acceptView, leaveView, markError, initialize]);
+  }, [acceptView, leaveView, markError, initialize, loadNotes]);
 
   const refresh = useCallback(async () => {
     if (!sessionRef.current || (!viewRef.current && failures.current > 0)) await initialize();
     else await sync();
   }, [initialize, sync]);
+  const refreshNow = useCallback(async () => {
+    if (refreshingRef.current) return;
+    const current = sessionRef.current;
+    const previous = viewRef.current;
+    if (!current || !previous) return initialize();
+    const requestScope = scope.current;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    try {
+      // Explicit refresh also reloads notes, without remounting the editor or
+      // resubmitting any pending command. Parallel polling remains read-only.
+      const result = await apiCall<RoomView>(
+        { action: 'get', code: previous.room.code },
+        current.token,
+      );
+      if (!alive.current || requestScope !== scope.current) return;
+      acceptView(result);
+      await loadNotes(result.room.code, current.token);
+      if (alive.current && sameMembership(viewRef.current, result)) {
+        unchanged.current = 0;
+        failures.current = 0;
+        setConnection('online');
+      }
+    } catch (err) {
+      if (!alive.current || requestScope !== scope.current) return;
+      if (err instanceof ClientError && ['FORBIDDEN', 'NOT_FOUND', 'EXPIRED'].includes(err.code)) {
+        leaveView();
+      }
+      if (err instanceof ClientError && err.code === 'UNAUTHORIZED') await initialize();
+      else markError(err);
+    } finally {
+      refreshingRef.current = false;
+      if (alive.current) setRefreshing(false);
+    }
+  }, [acceptView, initialize, leaveView, loadNotes, markError]);
   const restore = useCallback(async () => {
     await initialize(true);
   }, [initialize]);
@@ -466,12 +518,12 @@ export function useGame() {
           rememberLastRoom(null);
           leaveView();
         } else {
-          const oldCode = viewRef.current?.room.code;
+          const changedMembership = !sameMembership(viewRef.current, result);
           acceptView(result);
           unchanged.current = 0;
-          if (oldCode !== result.room.code) {
+          if (changedMembership) {
             await loadNotes(result.room.code, current.token).catch((err) => {
-              if (alive.current && viewRef.current?.room.code === result.room.code) markError(err);
+              if (alive.current && sameMembership(viewRef.current, result)) markError(err);
             });
           }
         }
@@ -595,6 +647,8 @@ export function useGame() {
     command,
     saveNotes,
     refresh,
+    refreshNow,
+    refreshing,
     restore,
     clearError: () => setError(null),
     leaveView,

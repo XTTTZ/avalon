@@ -73,10 +73,141 @@ async function advanceToTeam(context: Awaited<ReturnType<typeof setup>>) {
   return view;
 }
 describe('authoritative API, retries and persistence', () => {
+  it('replays a start request without reshuffling seats or dealing identities again', async () => {
+    const context = await setup();
+    const payload = command(context.view, { type: 'start' });
+    const token = context.sessions[0].token;
+    const first = (await handleApi(payload, token, context.deps)) as RoomView;
+    const readViews = () =>
+      Promise.all(
+        context.sessions.map((session) =>
+          handleApi({ action: 'get', code: first.room.code }, session.token, context.deps),
+        ),
+      );
+    const before = await readViews();
+    const retry = await handleApi(payload, token, context.deps);
+    expect(retry).toEqual(first);
+    expect(await readViews()).toEqual(before);
+  });
+  it('does not admit duplicate public names during concurrent joins and renames', async () => {
+    const dependencies = deps();
+    const sessions = await Promise.all([0, 1, 2].map((id) => guest(dependencies, id)));
+    const created = (await handleApi(
+      { action: 'create', name: '房主', config: standardConfig(5), requestId: randomUUID() },
+      sessions[0].token,
+      dependencies,
+    )) as RoomView;
+    const results = await Promise.allSettled(
+      sessions.slice(1).map((session, index) =>
+        handleApi(
+          {
+            action: 'join',
+            code: created.room.code,
+            name: index ? 'alice' : ' ＡＬＩＣＥ ',
+            requestId: randomUUID(),
+          },
+          session.token,
+          dependencies,
+        ),
+      ),
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { code: 'INVALID', message: '这个名字已被使用，请换一个' },
+    });
+
+    const context = await setup();
+    const renames = await Promise.allSettled(
+      context.sessions
+        .slice(0, 2)
+        .map((session) =>
+          handleApi(
+            command(context.view, { type: 'rename', name: '共用名字' }),
+            session.token,
+            context.deps,
+          ),
+        ),
+    );
+    const winner = renames.findIndex((result) => result.status === 'fulfilled');
+    const loser = winner === 0 ? 1 : 0;
+    expect(renames[loser]).toMatchObject({ status: 'rejected', reason: { code: 'CONFLICT' } });
+    const fresh = (await handleApi(
+      { action: 'get', code: context.view.room.code },
+      context.sessions[loser].token,
+      context.deps,
+    )) as RoomView;
+    expect(fresh.room.players.filter((player) => player.name === '共用名字')).toHaveLength(1);
+    await expect(
+      handleApi(
+        command(fresh, { type: 'rename', name: '共用名字' }),
+        context.sessions[loser].token,
+        context.deps,
+      ),
+    ).rejects.toMatchObject({ code: 'INVALID', message: '这个名字已被使用，请换一个' });
+  });
+
+  it('keeps the last player leave response retryable after the empty room expires', async () => {
+    const dependencies = deps();
+    const session = await guest(dependencies, 0);
+    const view = (await handleApi(
+      { action: 'create', name: '房主', config: standardConfig(5), requestId: randomUUID() },
+      session.token,
+      dependencies,
+    )) as RoomView;
+    const leave = command(view, { type: 'leave' });
+    expect(await handleApi(leave, session.token, dependencies)).toEqual({ left: true });
+    expect(await handleApi(leave, session.token, dependencies)).toEqual({ left: true });
+    await expect(
+      handleApi({ action: 'get', code: view.room.code }, session.token, dependencies),
+    ).rejects.toMatchObject({ code: 'EXPIRED' });
+    await dependencies.store.cleanup(now);
+    expect(await dependencies.store.get('rooms', view.room.code)).toBeNull();
+  });
+
+  it('never carries old private notes into a new room reusing its four-digit code', async () => {
+    const context = await setup();
+    const code = context.view.room.code;
+    const old = (await context.deps.store.get<RoomRecord>('rooms', code))!;
+    const target = old.state.players[0].id;
+    const notes = {
+      [target]: {
+        nickname: '旧昵称',
+        roleGuess: '',
+        alignmentGuess: 'unknown',
+        text: '旧房私人内容',
+      },
+    };
+    await handleApi(
+      { action: 'notes.save', code, notes, expectedRevision: 0 },
+      context.sessions[0].token,
+      context.deps,
+    );
+    // Keep the old note on purpose, including its still-future deadline. The
+    // next room can even have the same creation millisecond without matching.
+    await context.deps.store.transaction((tx) => tx.delete('rooms', code));
+    vi.spyOn(roomCodes, 'randomRoomCode').mockReturnValue(code);
+    const fresh = (await handleApi(
+      { action: 'create', name: '房主', config: standardConfig(5), requestId: randomUUID() },
+      context.sessions[0].token,
+      context.deps,
+    )) as RoomView;
+    expect(fresh.room.createdAt).toBe(old.state.createdAt);
+    expect(
+      await handleApi({ action: 'notes.get', code }, context.sessions[0].token, context.deps),
+    ).toEqual({ notes: {}, revision: 0 });
+    expect(
+      await handleApi(
+        { action: 'notes.save', code, notes: {}, expectedRevision: 0 },
+        context.sessions[0].token,
+        context.deps,
+      ),
+    ).toEqual({ notes: {}, revision: 1 });
+  });
+
   it('invalidates former leader requests and persists pending appointments with retry protection', async () => {
     const context = await setup();
     const before = await advanceToTeam(context);
-    const oldLeader = before.room.players.findIndex((p) => p.id === before.room.leaderId);
+    const oldLeader = context.view.room.players.findIndex((p) => p.id === before.room.leaderId);
     const next = before.room.players.find((p) => p.id !== before.room.leaderId)!;
     const replaced = (await handleApi(
       command(before, { type: 'assignLeader', targetId: next.id, timing: 'current' }),
@@ -267,7 +398,9 @@ describe('authoritative API, retries and persistence', () => {
   it('permits same-phase concurrent votes, exactly once, and rejects old phase ballots', async () => {
     const context = await setup();
     const team = await advanceToTeam(context);
-    const leaderIndex = team.room.players.findIndex((player) => player.id === team.room.leaderId);
+    const leaderIndex = context.view.room.players.findIndex(
+      (player) => player.id === team.room.leaderId,
+    );
     const voting = (await handleApi(
       command(team, {
         type: 'propose',
@@ -332,11 +465,36 @@ describe('authoritative API, retries and persistence', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(
       await handleApi(
-        { action: 'get', code: renamed.room.code, version: renamed.room.version },
+        {
+          action: 'get',
+          code: renamed.room.code,
+          version: renamed.room.version,
+          gameId: renamed.room.gameId,
+        },
         context.sessions[0].token,
         context.deps,
       ),
     ).toEqual({ unchanged: true, version: renamed.room.version });
+  });
+  it('does not treat an equal version from a recycled room code as unchanged', async () => {
+    const context = await setup();
+    const room = context.view.room;
+    for (const gameId of [undefined, 'previous-room-instance']) {
+      const result = await handleApi(
+        { action: 'get', code: room.code, version: room.version, ...(gameId ? { gameId } : {}) },
+        context.sessions[0].token,
+        context.deps,
+      );
+      expect(result).toHaveProperty('room.gameId', room.gameId);
+      expect(result).toHaveProperty('self.playerId', room.players[0].id);
+    }
+    expect(
+      await handleApi(
+        { action: 'get', code: room.code, version: room.version, gameId: room.gameId },
+        context.sessions[0].token,
+        context.deps,
+      ),
+    ).toEqual({ unchanged: true, version: room.version });
   });
   it('isolates private notes, checks target/revision and rejects prototype keys', async () => {
     const context = await setup();
@@ -453,7 +611,61 @@ describe('authoritative API, retries and persistence', () => {
     )) as NotesResult;
     expect(saved).toEqual({ notes: { [host]: note }, revision: 2 });
   });
-  it('allows saving after old notes expire while a rematch keeps the room alive', async () => {
+  it('retains private nicknames for a removed player in the finished game only', async () => {
+    const context = await setup();
+    const code = context.view.room.code;
+    const target = context.view.room.players[4].id;
+    const owner = context.sessions[1].token;
+    const host = context.sessions[0].token;
+    const notes = {
+      [target]: {
+        nickname: '私人代号',
+        roleGuess: '',
+        alignmentGuess: 'unknown',
+        text: '我的推测',
+      },
+    };
+    await handleApi(
+      { action: 'notes.save', code, notes, expectedRevision: 0 },
+      owner,
+      context.deps,
+    );
+    const started = await advanceToTeam(context);
+    const finished = (await handleApi(
+      command(started, { type: 'kick', targetId: target, endGame: true }),
+      host,
+      context.deps,
+    )) as RoomView;
+    expect(await handleApi({ action: 'notes.get', code }, owner, context.deps)).toEqual({
+      notes,
+      revision: 1,
+    });
+    expect(await handleApi({ action: 'notes.get', code }, host, context.deps)).toEqual({
+      notes: {},
+      revision: 0,
+    });
+    expect(JSON.stringify(finished)).not.toContain('私人代号');
+    expect(
+      await handleApi(
+        { action: 'notes.save', code, notes, expectedRevision: 1 },
+        owner,
+        context.deps,
+      ),
+    ).toEqual({ notes, revision: 2 });
+    await handleApi(command(finished, { type: 'rematch' }), host, context.deps);
+    expect(await handleApi({ action: 'notes.get', code }, owner, context.deps)).toEqual({
+      notes: {},
+      revision: 2,
+    });
+    expect(
+      await handleApi(
+        { action: 'notes.save', code, notes, expectedRevision: 2 },
+        owner,
+        context.deps,
+      ),
+    ).toEqual({ notes: {}, revision: 3 });
+  });
+  it('keeps private notes through room renewal and cleanup without polling or notes extending the room', async () => {
     const context = await setup();
     const code = context.view.room.code;
     const target = context.view.room.players[0].id;
@@ -465,29 +677,60 @@ describe('authoritative API, retries and persistence', () => {
       context.sessions[0].token,
       context.deps,
     );
+    const startedAt = { ...context.deps, now: () => now + 3_600_000 };
     let view = (await handleApi(
       command(context.view, { type: 'start' }),
       context.sessions[0].token,
-      context.deps,
+      startedAt,
     )) as RoomView;
-    const later = { ...context.deps, now: () => now + 6 * 86_400_000 };
+    const later = { ...context.deps, now: () => now + 25 * 3_600_000 };
+    const beforePoll = await context.deps.store.get('rooms', code);
+    expect(
+      await handleApi(
+        { action: 'get', code, version: view.room.version, gameId: view.room.gameId },
+        context.sessions[0].token,
+        later,
+      ),
+    ).toEqual({ unchanged: true, version: view.room.version });
+    expect(
+      await handleApi({ action: 'notes.get', code }, context.sessions[0].token, later),
+    ).toEqual({ notes, revision: 1 });
+    expect(await context.deps.store.get('rooms', code)).toEqual(beforePoll);
+    await context.deps.store.cleanup(later.now());
+    expect(
+      await context.deps.store.get('notes', `${code}_${context.sessions[0].userId}`),
+    ).toMatchObject({ expiresAt: view.room.expiresAt, revision: 1 });
+    expect(
+      await handleApi(
+        { action: 'notes.save', code, notes, expectedRevision: 1 },
+        context.sessions[0].token,
+        later,
+      ),
+    ).toEqual({ notes, revision: 2 });
+    expect((await context.deps.store.get<RoomRecord>('rooms', code))?.state.expiresAt).toBe(
+      view.room.expiresAt,
+    );
     view = (await handleApi(
       command(view, { type: 'abort' }),
       context.sessions[0].token,
       later,
     )) as RoomView;
-    await handleApi(command(view, { type: 'rematch' }), context.sessions[0].token, later);
-    const afterNotesExpiry = { ...context.deps, now: () => now + 8 * 86_400_000 };
+    view = (await handleApi(
+      command(view, { type: 'rematch' }),
+      context.sessions[0].token,
+      later,
+    )) as RoomView;
     expect(
-      await handleApi({ action: 'notes.get', code }, context.sessions[0].token, afterNotesExpiry),
-    ).toEqual({ notes: {}, revision: 0 });
+      await handleApi({ action: 'notes.get', code }, context.sessions[0].token, later),
+    ).toEqual({ notes, revision: 2 });
+    const expired = { ...context.deps, now: () => view.room.expiresAt };
+    await expect(
+      handleApi({ action: 'notes.get', code }, context.sessions[0].token, expired),
+    ).rejects.toMatchObject({ code: 'EXPIRED' });
+    await context.deps.store.cleanup(expired.now());
     expect(
-      await handleApi(
-        { action: 'notes.save', code, notes, expectedRevision: 0 },
-        context.sessions[0].token,
-        afterNotesExpiry,
-      ),
-    ).toEqual({ notes, revision: 1 });
+      await context.deps.store.get('notes', `${code}_${context.sessions[0].userId}`),
+    ).toBeNull();
   });
   it('rolls back failed transactions, recovers leave receipts, and clears removed/expired rooms', async () => {
     const context = await setup();

@@ -64,11 +64,67 @@ $$;
 CREATE OR REPLACE FUNCTION public.avalon_cleanup(p_now bigint, p_limit integer)
 RETURNS integer LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $$
 DECLARE r record; deleted integer; total integer := 0;
+  candidates jsonb; lock_key text; note_value jsonb; room_value jsonb;
+  room_code text; owner_id text; room_expiry bigint; same_room boolean;
 BEGIN
-  FOR r IN SELECT collection, id FROM public.avalon_documents
-    WHERE expires_at <= p_now ORDER BY collection, id LIMIT LEAST(GREATEST(p_limit, 0), 400)
+  SELECT COALESCE(jsonb_agg(to_jsonb(d)), '[]'::jsonb) INTO candidates
+  FROM (SELECT collection, id FROM public.avalon_documents
+    WHERE expires_at <= p_now ORDER BY collection, id
+    LIMIT LEAST(GREATEST(p_limit, 0), 400)) d;
+
+  -- Read a note and its parent room under the same sorted locks as commits.
+  -- Acquire every key first: locking a room inside the loop could deadlock
+  -- with another transaction that changes multiple notes and rooms.
+  FOR lock_key IN
+    SELECT key FROM (
+      SELECT (x->>'collection') || '/' || (x->>'id') AS key
+        FROM jsonb_array_elements(candidates) x
+      UNION
+      SELECT 'rooms/' || split_part(x->>'id', '_', 1) AS key
+        FROM jsonb_array_elements(candidates) x WHERE x->>'collection' = 'notes'
+    ) keys ORDER BY key
   LOOP
-    PERFORM pg_advisory_xact_lock(hashtextextended(r.collection || '/' || r.id, 0));
+    PERFORM pg_advisory_xact_lock(hashtextextended(lock_key, 0));
+  END LOOP;
+
+  FOR r IN SELECT * FROM jsonb_to_recordset(candidates) AS x(collection text, id text)
+  LOOP
+    IF r.collection = 'notes' THEN
+      SELECT value INTO note_value FROM public.avalon_documents
+        WHERE collection = r.collection AND id = r.id AND expires_at <= p_now;
+      IF note_value IS NULL THEN CONTINUE; END IF;
+      room_code := split_part(r.id, '_', 1);
+      owner_id := substring(r.id FROM length(room_code) + 2);
+      SELECT value->'state' INTO room_value FROM public.avalon_documents
+        WHERE collection = 'rooms' AND id = room_code;
+      room_expiry := (room_value->>'expiresAt')::bigint;
+      -- New rooms have an immutable instance ID. Legacy rooms keep their
+      -- timestamp fallback until they expire; old notes cannot cross into a
+      -- newly created room that happens to reuse the same four-digit code.
+      same_room := CASE
+        WHEN room_value->>'instanceId' IS NOT NULL THEN
+          note_value->>'roomInstanceId' = room_value->>'instanceId'
+        WHEN note_value->>'roomInstanceId' IS NOT NULL THEN false
+        WHEN note_value->>'roomCreatedAt' IS NOT NULL THEN
+          note_value->>'roomCreatedAt' = room_value->>'createdAt'
+        ELSE (note_value->>'expiresAt')::bigint > (room_value->>'createdAt')::bigint
+      END;
+      IF room_expiry > p_now AND same_room AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(room_value->'players') player
+          WHERE player->>'userId' = owner_id
+      ) THEN
+        UPDATE public.avalon_documents SET
+          expires_at = room_expiry,
+          value = note_value || jsonb_build_object(
+            'expiresAt', room_expiry, 'roomCreatedAt', (room_value->>'createdAt')::bigint
+          ) || CASE WHEN room_value->>'instanceId' IS NOT NULL
+            THEN jsonb_build_object('roomInstanceId', room_value->>'instanceId')
+            ELSE '{}'::jsonb END,
+          revision = gen_random_uuid()
+          WHERE collection = r.collection AND id = r.id;
+        CONTINUE;
+      END IF;
+    END IF;
     DELETE FROM public.avalon_documents WHERE collection = r.collection AND id = r.id
       AND expires_at <= p_now;
     GET DIAGNOSTICS deleted = ROW_COUNT;

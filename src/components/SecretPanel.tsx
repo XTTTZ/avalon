@@ -2,22 +2,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Eye, Fingerprint, LockKeyhole, ShieldCheck } from 'lucide-react';
 import type { GameCommand, RoomView } from '../../shared/types';
 import { ROLE_META } from '../../shared/rules';
+import './SecretPanel.css';
 
 export function SecretPanel({
   view,
   busy,
   command,
-  confirm,
+  displayName,
 }: {
   view: RoomView;
   busy: boolean;
   command: (command: GameCommand) => Promise<void>;
-  confirm: (title: string, message: string, action: () => Promise<void>) => void;
+  displayName?: (id: string) => string;
 }) {
   const { room, self } = view;
   const [revealed, setRevealed] = useState(false);
   const [hasViewed, setHasViewed] = useState(false);
-  const [target, setTarget] = useState('');
   const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holding = useRef(false);
   const hide = useCallback(() => {
@@ -34,8 +34,10 @@ export function SecretPanel({
   };
   useEffect(() => {
     hide();
-    setTarget('');
   }, [room.phaseKey, hide]);
+  useEffect(() => {
+    setHasViewed(false);
+  }, [room.gameId]);
   useEffect(() => {
     const visibility = () => {
       if (document.visibilityState !== 'visible') hide();
@@ -57,7 +59,8 @@ export function SecretPanel({
       window.removeEventListener('pointercancel', release);
     };
   }, [hide]);
-  const playerName = (id: string) => room.players.find((p) => p.id === id)?.name ?? '玩家';
+  const playerName = (id: string) =>
+    displayName?.(id) ?? room.players.find((p) => p.id === id)?.name ?? '玩家';
   if (room.phase === 'lobby')
     return (
       <div className="empty-state card">
@@ -78,47 +81,49 @@ export function SecretPanel({
         </span>
       </div>
       <div className={`secret-card ${revealed ? 'is-revealed' : ''}`}>
-        {!revealed ? (
-          <div className="secret-cover">
-            <div className="secret-emblem">
-              <ShieldCheck size={44} strokeWidth={1} />
+        <div className="secret-viewport">
+          {!revealed ? (
+            <div className="secret-cover">
+              <div className="secret-emblem">
+                <ShieldCheck size={44} strokeWidth={1} />
+              </div>
+              <h2>身份已隐藏</h2>
             </div>
-            <h2>身份已隐藏</h2>
-          </div>
-        ) : (
-          <div className="secret-content" aria-live="polite">
-            <h2>{self.role ? ROLE_META[self.role].name : '等待发牌'}</h2>
-            <span className={`alignment-label ${self.alignment}`}>
-              {self.alignment === 'good' ? '当前阵营 · 好人' : '当前阵营 · 坏人'}
-            </span>
-            <p className="role-description">{self.roleText}</p>
-            {self.knownPlayers.length > 0 && (
-              <div className="known-players">
-                <h3>你知道的信息</h3>
-                {self.knownPlayers.map((p) => (
-                  <div key={`${p.playerId}-${p.kind}`}>
-                    <span>{playerName(p.playerId)}</span>
-                    <small>{p.label}</small>
-                  </div>
-                ))}
-              </div>
-            )}
-            {self.ladyResults.length > 0 && (
-              <div className="known-players">
-                <h3>湖中仙女查验</h3>
-                {self.ladyResults.map((result) => (
-                  <div key={`${result.round}-${result.targetId}`}>
-                    <span>{playerName(result.targetId)}</span>
-                    <small>
-                      第 {result.round} 轮 · {result.alignment === 'good' ? '好人' : '坏人'}
-                    </small>
-                  </div>
-                ))}
-                <p className="small">查验时的阵营；兰斯洛特之后可能变化。</p>
-              </div>
-            )}
-          </div>
-        )}
+          ) : (
+            <div className="secret-content" aria-live="polite">
+              <h2>{self.role ? ROLE_META[self.role].name : '等待发牌'}</h2>
+              <span className={`alignment-label ${self.alignment}`}>
+                {self.alignment === 'good' ? '当前阵营 · 好人' : '当前阵营 · 坏人'}
+              </span>
+              <p className="role-description">{self.roleText}</p>
+              {self.knownPlayers.length > 0 && (
+                <div className="known-players">
+                  <h3>你知道的信息</h3>
+                  {self.knownPlayers.map((p) => (
+                    <div key={`${p.playerId}-${p.kind}`}>
+                      <span>{playerName(p.playerId)}</span>
+                      <small>{p.label}</small>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {self.ladyResults.length > 0 && (
+                <div className="known-players">
+                  <h3>湖中仙女查验</h3>
+                  {self.ladyResults.map((result) => (
+                    <div key={`${result.round}-${result.targetId}`}>
+                      <span>{playerName(result.targetId)}</span>
+                      <small>
+                        第 {result.round} 轮 · {result.alignment === 'good' ? '好人' : '坏人'}
+                      </small>
+                    </div>
+                  ))}
+                  <p className="small">查验时的阵营；兰斯洛特之后可能变化。</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         <button
           className="hold-button"
           onPointerDown={(event) => {
@@ -170,47 +175,6 @@ export function SecretPanel({
           >
             {room.readyIds.includes(self.playerId) ? '已确认，等待其他玩家' : '确认身份'}
           </button>
-        </div>
-      )}
-      {room.phase === 'assassination' && (
-        <div className="card action-card">
-          <h3>刺杀梅林</h3>
-          {!revealed ? (
-            <p>显示身份后查看行动</p>
-          ) : self.canAssassinate ? (
-            <>
-              <p>选择梅林，命中则坏人获胜。</p>
-              <div className="target-grid">
-                {room.players
-                  .filter((p) => p.id !== self.playerId)
-                  .map((player) => (
-                    <button
-                      className={`target-chip ${target === player.id ? 'selected' : ''}`}
-                      key={player.id}
-                      onClick={() => setTarget(player.id)}
-                    >
-                      {player.seat + 1}. {player.name}
-                    </button>
-                  ))}
-              </div>
-              <button
-                className="button danger full"
-                disabled={busy || !target}
-                onClick={() => {
-                  hide();
-                  confirm(
-                    '确认刺杀目标？',
-                    `刺杀「${playerName(target)}」后本局结束，无法撤回。`,
-                    () => command({ type: 'assassinate', targetId: target }),
-                  );
-                }}
-              >
-                确认刺杀{target ? ` · ${playerName(target)}` : ''}
-              </button>
-            </>
-          ) : (
-            <p>等待刺客选择目标</p>
-          )}
         </div>
       )}
     </div>
