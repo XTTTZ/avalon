@@ -385,11 +385,10 @@ describe('lobby and authoritative permissions', () => {
   it('forbids replacing active players and rejoining preserves active identity', () => {
     const room = start();
     const p = room.players[0];
+    const other = room.players.find((player) => player.id !== room.hostId)!;
     for (const type of ['leave', 'kick', 'transferHost', 'configure'] as const) {
       const action =
-        type === 'configure'
-          ? { type, config: room.config }
-          : { type, targetId: room.players[1].id };
+        type === 'configure' ? { type, config: room.config } : { type, targetId: other.id };
       errorCode(() => command(room, room.hostId, action as GameCommand), 'CONFLICT');
     }
     errorCode(() => joinRoom(room, { userId: 'new', name: '替补' }, NOW), 'CONFLICT');
