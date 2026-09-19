@@ -35,13 +35,18 @@ import { LANCELOT_RULES, ROLE_META, standardConfig } from '../shared/rules';
 import { RulesEditor, RulesSummary } from './components/RulesEditor';
 import { SecretPanel } from './components/SecretPanel';
 import { AssassinationPanel } from './components/AssassinationPanel';
-import { eventText, playerName } from './player-names';
+import { eventText, playerInitial, playerName } from './player-names';
 import { NotesPanel } from './components/NotesPanel';
 import { PlayerSeats } from './components/PlayerSeats';
 import './styles.css';
 
 type Tab = 'table' | 'identity' | 'notes' | 'history';
-type Confirmation = { title: string; message: string; action: () => Promise<void> };
+type Confirmation = {
+  title: string;
+  message: string;
+  action: () => Promise<void>;
+  danger?: boolean;
+};
 const PHASE_LABELS = {
   lobby: '等待玩家',
   reveal: '确认身份',
@@ -630,7 +635,7 @@ function History({
         </div>
         <span className="pill">公开记录</span>
       </div>
-      {room.quests.length === 0 && room.teamVotes.length === 0 && (
+      {room.quests.length === 0 && room.teamVotes.length === 0 && room.ladyHistory.length === 0 && (
         <div className="card empty-state compact">
           <ScrollText size={28} />
           <h3>暂无记录</h3>
@@ -690,6 +695,19 @@ function History({
               </div>
             </details>
           ))}
+        </div>
+      )}
+      {room.ladyHistory.length > 0 && (
+        <div className="history-group">
+          <h3>湖中仙女</h3>
+          <article className="card lady-history-card">
+            {room.ladyHistory.map((playerId, index) => (
+              <div key={`${index}-${playerId}`}>
+                <span>{index === 0 ? '初始持有人' : `第 ${index} 次交接`}</span>
+                <strong>{name(playerId)}</strong>
+              </div>
+            ))}
+          </article>
         </div>
       )}
       <div className="history-group">
@@ -810,8 +828,25 @@ export default function App() {
     setDialog(null);
     setConfirmState(null);
   }, [room?.code, room?.gameId]);
-  const confirm = (title: string, message: string, action: () => Promise<void>) =>
-    setConfirmState({ title, message, action });
+  const confirm = (title: string, message: string, action: () => Promise<void>, danger = false) =>
+    setConfirmState({ title, message, action, danger });
+  const leaveRoom = () =>
+    confirm(
+      room?.phase === 'finished' ? '退出房间？' : '离开房间？',
+      room?.phase === 'finished'
+        ? '退出后仍会保留本局公开结算，但你不能再查看这个房间。'
+        : isHost
+          ? '你离开后，房主将自动转交给下一位玩家。'
+          : '你的座位将被释放；之后可通过房间号重新加入。',
+      () => command({ type: 'leave' }),
+    );
+  const dissolveRoom = () =>
+    confirm(
+      '解散房间？',
+      '所有玩家将立即退出，房间和私人笔记作废，无法撤回。',
+      () => command({ type: 'dissolve' }),
+      true,
+    );
   const removePlayer = (target: PublicPlayer) => {
     if (!room || !isHost || target.id === self?.playerId) return;
     setDialog(null);
@@ -967,6 +1002,12 @@ export default function App() {
                 </h1>
               </div>
               <div className="room-heading-meta">
+                {room!.phase === 'finished' && (
+                  <button className="text-button subdued" disabled={busy} onClick={leaveRoom}>
+                    <DoorOpen size={15} />
+                    退出房间
+                  </button>
+                )}
                 <button
                   className="text-button refresh-button"
                   disabled={game.refreshing}
@@ -1140,7 +1181,8 @@ export default function App() {
                       );
                       return (
                         <p className="departed-player" key={player.id}>
-                          {displayName(player.id)} · 已移除
+                          {displayName(player.id)} ·
+                          {player.departure === 'left' ? ' 已离开' : ' 已移除'}
                           {role ? ` · ${ROLE_META[role.role].name}` : ''}
                         </p>
                       );
@@ -1178,24 +1220,13 @@ export default function App() {
                 </aside>
               </div>
               <div className="room-footer">
-                {room!.phase === 'lobby' ? (
-                  <button
-                    className="text-button subdued"
-                    disabled={busy}
-                    onClick={() =>
-                      confirm(
-                        '离开房间？',
-                        isHost
-                          ? '你离开后，房主将自动转交给下一位玩家。'
-                          : '你的座位将被释放；之后可通过房间号重新加入。',
-                        () => command({ type: 'leave' }),
-                      )
-                    }
-                  >
+                {room!.phase === 'lobby' && (
+                  <button className="text-button subdued" disabled={busy} onClick={leaveRoom}>
                     <DoorOpen size={14} />
                     离开房间
                   </button>
-                ) : room!.phase !== 'finished' && isHost ? (
+                )}
+                {room!.phase !== 'lobby' && room!.phase !== 'finished' && isHost && (
                   <button
                     className="text-button subdued"
                     disabled={busy}
@@ -1207,7 +1238,16 @@ export default function App() {
                   >
                     结束本局
                   </button>
-                ) : null}
+                )}
+                {isHost && (
+                  <button
+                    className="text-button danger-text"
+                    disabled={busy}
+                    onClick={dissolveRoom}
+                  >
+                    解散房间
+                  </button>
+                )}
               </div>
             </div>
             {tab === 'identity' && (
@@ -1217,7 +1257,7 @@ export default function App() {
               <NotesPanel
                 key={`${room!.createdAt}:${self!.playerId}`}
                 players={[...room!.players, ...(room!.departedPlayers ?? [])]}
-                departedIds={room!.departedPlayers?.map((player) => player.id)}
+                departedPlayers={room!.departedPlayers}
                 selfId={self!.playerId}
                 notes={game.notes}
                 revision={game.notesRevision}
@@ -1322,7 +1362,9 @@ export default function App() {
       {dialog === 'manage' && managing && room && (
         <Modal title="玩家" onClose={() => setDialog(null)}>
           <div className="manage-content">
-            <span className="avatar">{Array.from(displayName(managing.id))[0]}</span>
+            <span className="avatar">
+              <span className="avatar-letter">{playerInitial(displayName(managing.id))}</span>
+            </span>
             <h2>{displayName(managing.id)}</h2>
             <p className="muted">
               {managing.seat + 1} 号玩家{managing.id === room.hostId ? ' · 房主' : ''}
@@ -1474,7 +1516,7 @@ export default function App() {
                 取消
               </button>
               <button
-                className="button primary"
+                className={`button ${confirmState.danger ? 'danger' : 'primary'}`}
                 disabled={busy}
                 onClick={() => {
                   const action = confirmState.action;

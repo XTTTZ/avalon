@@ -3,6 +3,7 @@ import { LANCELOT_RULES, ROLE_META, validateConfig } from '../shared/rules';
 import {
   GameError,
   type Alignment,
+  type DepartedPlayer,
   type GameCommand,
   type GameConfig,
   type KnownPlayer,
@@ -56,7 +57,9 @@ export interface RoomState {
   events: PublicEvent[];
   createdAt: number;
   orderCustomized?: boolean;
-  departedPlayers?: { id: string; name: string; seat: number }[];
+  departedPlayers?: DepartedPlayer[];
+  // Tombstone retained until cleanup so reconnecting players get a clear reason.
+  dissolvedAt?: number;
   // Stable across rematches; unlike a reusable room code or per-game ID.
   instanceId?: string;
   // Absent in legacy rooms; reads preserve their existing expiration deadline.
@@ -661,7 +664,12 @@ export function applyCommand(
       }
       if (room.phase === 'finished') {
         room.departedPlayers ??= [];
-        room.departedPlayers.push({ id: chosen.id, name: chosen.name, seat: chosen.seat });
+        room.departedPlayers.push({
+          id: chosen.id,
+          name: chosen.name,
+          seat: chosen.seat,
+          departure: 'removed',
+        });
       }
       room.players = room.players.filter((p) => p.id !== chosen.id);
       room.players.forEach((p, i) => {
@@ -671,13 +679,40 @@ export function applyCommand(
       break;
     }
     case 'leave': {
-      requirePhase(room, 'lobby');
+      ensure(
+        room.phase === 'lobby' || room.phase === 'finished',
+        'CONFLICT',
+        '游戏进行中不能退出，请让房主先结束本局',
+      );
+      if (room.phase === 'finished') {
+        room.departedPlayers ??= [];
+        room.departedPlayers.push({
+          id: player.id,
+          name: player.name,
+          seat: player.seat,
+          departure: 'left',
+        });
+      }
       room.players = room.players.filter((p) => p.id !== player.id);
       room.players.forEach((p, i) => {
         p.seat = i;
       });
       if (room.hostId === player.id) room.hostId = room.players[0]?.id ?? '';
       event(room, [player, ' 离开了房间'], now);
+      if (!room.players.length) {
+        room.lastActiveAt = now;
+        room.expiresAt = now;
+      }
+      break;
+    }
+    case 'dissolve': {
+      host(room, player);
+      event(room, '房主解散了房间', now);
+      room.players = [];
+      room.hostId = '';
+      room.dissolvedAt = now;
+      room.lastActiveAt = now;
+      room.expiresAt = now;
       break;
     }
     case 'abort': {

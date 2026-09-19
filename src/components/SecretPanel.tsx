@@ -63,7 +63,7 @@ export function SecretPanel({
     displayName?.(id) ?? room.players.find((p) => p.id === id)?.name ?? '玩家';
   if (room.phase === 'lobby')
     return (
-      <div className="empty-state card">
+      <div className="empty-state card locked-state">
         <LockKeyhole size={36} />
         <h2>尚未发身份</h2>
         <p>等待房主开始游戏</p>

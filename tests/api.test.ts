@@ -164,6 +164,44 @@ describe('authoritative API, retries and persistence', () => {
     expect(await dependencies.store.get('rooms', view.room.code)).toBeNull();
   });
 
+  it('dissolves a room idempotently, revokes every seat and deletes private notes', async () => {
+    const context = await setup();
+    const code = context.view.room.code;
+    const notes = {
+      [context.view.room.players[1].id]: {
+        nickname: '仅本人可见',
+        roleGuess: '' as const,
+        alignmentGuess: 'unknown' as const,
+        text: '解散后删除',
+      },
+    };
+    for (const index of [0, 1])
+      await handleApi(
+        { action: 'notes.save', code, notes, expectedRevision: 0 },
+        context.sessions[index].token,
+        context.deps,
+      );
+    const dissolve = command(context.view, { type: 'dissolve' });
+    await expect(
+      handleApi(dissolve, context.sessions[1].token, context.deps),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await handleApi(dissolve, context.sessions[0].token, context.deps)).toEqual({
+      left: true,
+    });
+    expect(await handleApi(dissolve, context.sessions[0].token, context.deps)).toEqual({
+      left: true,
+    });
+    for (const session of context.sessions)
+      expect(await context.deps.store.get('notes', `${code}_${session.userId}`)).toBeNull();
+    await expect(
+      handleApi({ action: 'get', code }, context.sessions[2].token, context.deps),
+    ).rejects.toMatchObject({ code: 'EXPIRED', message: '房间已被房主解散' });
+    expect(
+      ((await handleApi({ action: 'session' }, context.sessions[2].token, context.deps)) as Session)
+        .lastRoom,
+    ).toBeNull();
+  });
+
   it('never carries old private notes into a new room reusing its four-digit code', async () => {
     const context = await setup();
     const code = context.view.room.code;

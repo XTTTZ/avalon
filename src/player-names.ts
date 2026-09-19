@@ -1,5 +1,9 @@
 import type { Notes, PublicEvent, PublicPlayer } from '../shared/types';
 
+export function playerInitial(name: string): string {
+  return (Array.from(name.trim())[0] ?? '?').toLocaleUpperCase('zh-CN');
+}
+
 export function playerName(
   players: PublicPlayer[],
   notes: Notes,

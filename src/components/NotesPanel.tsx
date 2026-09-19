@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
 import { LockKeyhole, Save } from 'lucide-react';
-import type { Notes, PlayerNote, PublicPlayer, Role, Alignment } from '../../shared/types';
+import type {
+  Alignment,
+  DepartedPlayer,
+  Notes,
+  PlayerNote,
+  PublicPlayer,
+  Role,
+} from '../../shared/types';
 import { ROLE_META } from '../../shared/rules';
+import { playerInitial } from '../player-names';
 
 const blankNote = (): PlayerNote => ({
   nickname: '',
@@ -11,7 +19,7 @@ const blankNote = (): PlayerNote => ({
 });
 export function NotesPanel({
   players,
-  departedIds = [],
+  departedPlayers = [],
   selfId,
   notes,
   revision,
@@ -20,7 +28,7 @@ export function NotesPanel({
   save,
 }: {
   players: PublicPlayer[];
-  departedIds?: string[];
+  departedPlayers?: DepartedPlayer[];
   selfId: string;
   notes: Notes;
   revision: number;
@@ -84,9 +92,10 @@ export function NotesPanel({
   };
   if (!players.some((player) => player.id !== selfId)) {
     return (
-      <div className="card empty-state">
-        <LockKeyhole size={30} />
+      <div className="card empty-state locked-state">
+        <LockKeyhole size={36} />
         <h2>等待其他玩家加入</h2>
+        <p>朋友加入后可以记录笔记</p>
       </div>
     );
   }
@@ -111,11 +120,18 @@ export function NotesPanel({
                 key={player.id}
                 onClick={() => setSelected(player.id)}
               >
-                <span className="avatar mini">{Array.from(displayName(player.id))[0]}</span>
+                <span className="avatar mini">
+                  <span className="avatar-letter">{playerInitial(displayName(player.id))}</span>
+                </span>
                 <span>
                   {displayName(player.id)}
                   <small>
-                    {departedIds.includes(player.id) ? '已移除' : `${player.seat + 1} 号`}
+                    {departedPlayers.find((departed) => departed.id === player.id)?.departure ===
+                    'left'
+                      ? '已离开'
+                      : departedPlayers.some((departed) => departed.id === player.id)
+                        ? '已移除'
+                        : `${player.seat + 1} 号`}
                   </small>
                 </span>
                 {draft[player.id]?.text && <i className="note-dot" />}

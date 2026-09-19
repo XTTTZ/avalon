@@ -131,6 +131,7 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
       transferHost: ['targetId'],
       kick: ['targetId', 'endGame'],
       leave: [],
+      dissolve: [],
       abort: [],
       rematch: [],
     };
@@ -144,6 +145,7 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
 }
 function active(record: RoomRecord | null, now: number): RoomRecord {
   if (!record) throw new GameError('NOT_FOUND', '房间不存在或已清理');
+  if (record.state.dissolvedAt !== undefined) throw new GameError('EXPIRED', '房间已被房主解散');
   if (record.state.expiresAt <= now) throw new GameError('EXPIRED', '房间已过期，请创建新房间');
   return record;
 }
@@ -355,8 +357,12 @@ export async function handleApi(
       )
         throw new GameError('CONFLICT', '房间状态已更新，请刷新后重试');
       roomRate(record, userId, now);
+      const dissolvedUserIds =
+        request.command.type === 'dissolve'
+          ? record.state.players.map((player) => player.userId)
+          : [];
       record.state = applyCommand(record.state, userId, request.command as GameCommand, now);
-      const left = request.command.type === 'leave';
+      const left = request.command.type === 'leave' || request.command.type === 'dissolve';
       record.receipts = [
         ...record.receipts,
         { id: request.requestId, userId, digest: hash, left },
@@ -366,7 +372,8 @@ export async function handleApi(
         const user = await ensureUser(transaction, userId, claims.provider, now);
         if (user.lastRoom === request.code) user.lastRoom = null;
         await transaction.set('users', userId, user, user.expiresAt);
-        await transaction.delete('notes', `${request.code}_${userId}`);
+        for (const leavingUserId of dissolvedUserIds.length ? dissolvedUserIds : [userId])
+          await transaction.delete('notes', `${request.code}_${leavingUserId}`);
         return { left: true } as const;
       }
       return projectRoom(record.state, userId);

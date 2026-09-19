@@ -34,6 +34,9 @@ export interface PublicPlayer {
   name: string;
   seat: number;
 }
+export interface DepartedPlayer extends PublicPlayer {
+  departure?: 'left' | 'removed';
+}
 export interface QuestResult {
   round: number;
   team: string[];
@@ -64,7 +67,7 @@ export interface PublicRoom {
   phase: Phase;
   hostId: string;
   players: PublicPlayer[];
-  departedPlayers?: PublicPlayer[];
+  departedPlayers?: DepartedPlayer[];
   orderCustomized?: boolean;
   config: GameConfig;
   leaderId: string | null;
@@ -132,6 +135,7 @@ export type GameCommand =
   | { type: 'transferHost'; targetId: string }
   | { type: 'kick'; targetId: string; endGame?: boolean }
   | { type: 'leave' }
+  | { type: 'dissolve' }
   | { type: 'abort' }
   | { type: 'rematch' };
 export interface Session {

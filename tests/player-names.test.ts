@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Notes, PlayerNote, PublicEvent, PublicPlayer } from '../shared/types';
-import { eventText, playerName } from '../src/player-names';
+import { eventText, playerInitial, playerName } from '../src/player-names';
 
 const players: PublicPlayer[] = [
   { id: 'p1', name: '小明', seat: 0 },
@@ -23,6 +23,10 @@ const render = (entry: PublicEvent, members = players, notes: Notes = {}) =>
   eventText(entry, members, (id, fallback) => playerName(members, notes, id, fallback));
 
 describe('private player names', () => {
+  it('uses an uppercase first character in player avatars', () => {
+    expect(playerInitial('alice')).toBe('A');
+    expect(playerInitial(' 骑士')).toBe('骑');
+  });
   it('uses trimmed private nicknames and falls back to public or snapshot names', () => {
     expect(playerName(players, { p1: note('  好友  ') }, 'p1')).toBe('好友');
     expect(playerName(players, { p1: note('  ') }, 'p1')).toBe('小明');

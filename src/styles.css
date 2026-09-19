@@ -870,7 +870,17 @@ textarea {
   background: #edf2e8;
   color: var(--forest);
   font-size: 20px;
+  font-weight: 650;
+  line-height: 1;
   flex-shrink: 0;
+}
+.avatar-letter {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+  text-transform: uppercase;
 }
 .selected-avatar {
   background: #dcebd6;
@@ -995,6 +1005,9 @@ textarea {
 .room-footer {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 .bottom-nav {
   position: fixed;
@@ -1027,6 +1040,13 @@ textarea {
   background: #edf4ea;
   color: var(--forest);
   font-weight: 650;
+}
+.bottom-nav button > svg {
+  width: 22px;
+  height: 22px;
+}
+.bottom-nav button > span {
+  line-height: 20px;
 }
 .nav-notification {
   width: 6px;
@@ -1241,6 +1261,29 @@ textarea {
   margin-top: 10px;
   color: var(--muted);
 }
+.lady-history-card {
+  padding: 6px 16px;
+}
+.lady-history-card > div {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.lady-history-card > div:last-child {
+  border-bottom: 0;
+}
+.lady-history-card span {
+  color: var(--muted);
+  font-size: 14px;
+}
+.lady-history-card strong {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
 .result-badge {
   display: inline-flex;
   align-items: center;
@@ -1353,6 +1396,17 @@ summary::-webkit-details-marker {
 }
 .empty-state.compact {
   padding: 28px 16px;
+}
+.locked-state {
+  min-height: 236px;
+  justify-content: center;
+}
+.locked-state > svg {
+  width: 36px;
+  height: 36px;
+}
+.locked-state > p {
+  color: var(--muted);
 }
 .finish-banner {
   padding: 22px 16px;

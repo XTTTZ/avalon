@@ -2,6 +2,7 @@ import { Check, Crown, GripVertical, Plus } from 'lucide-react';
 import type { PublicPlayer, PublicRoom } from '../../shared/types';
 import { ROLE_META } from '../../shared/rules';
 import { movePlayer, useCardSort } from './useCardSort';
+import { playerInitial } from '../player-names';
 
 export function PlayerSeats({
   room,
@@ -67,7 +68,7 @@ export function PlayerSeats({
             <span className="seat-number">{position + 1}</span>
             {sortOrder && <GripVertical className="sort-grip" size={16} />}
             <div className={`avatar ${selected ? 'selected-avatar' : ''}`}>
-              <span>{Array.from(name)[0]}</span>
+              <span className="avatar-letter">{playerInitial(name)}</span>
               {leader && (
                 <span className="leader-marker">
                   <Crown size={11} />

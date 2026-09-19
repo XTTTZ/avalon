@@ -593,6 +593,9 @@ describe('secrets, optional modules and rematch', () => {
     const next = room.players.find((p) => !room.ladyHistory.includes(p.id))!;
     room = command(room, target.id, { type: 'lady', targetId: next.id });
     expect(room.ladyHistory).toEqual([holder, target.id, next.id]);
+    expect(
+      view(room, room.players.find((player) => player.id !== target.id)!.id).room.ladyHistory,
+    ).toEqual([holder, target.id, next.id]);
   });
   it('skips lady actions once a winning threshold is reached', () => {
     let room = start({ ...standardConfig(5), lady: true });
@@ -749,5 +752,30 @@ describe('card order and host removals', () => {
     expect(room.players).toHaveLength(4);
     expect(view(room, room.hostId).room.revealedRoles).toEqual([]);
     errorCode(() => command(room, room.hostId, { type: 'start' }), 'CONFLICT');
+  });
+
+  it('lets players leave a finished game and lets only the host dissolve the room', () => {
+    let room = start();
+    room = command(room, room.hostId, { type: 'abort' });
+    const leaving = room.players.find((player) => player.id !== room.hostId)!;
+    const role = room.secrets[leaving.id].role;
+    room = command(room, leaving.id, { type: 'leave' });
+    expect(room.players.some((player) => player.id === leaving.id)).toBe(false);
+    expect(room.departedPlayers).toContainEqual({
+      id: leaving.id,
+      name: leaving.name,
+      seat: leaving.seat,
+      departure: 'left',
+    });
+    expect(view(room, room.hostId).room.revealedRoles).toContainEqual({
+      playerId: leaving.id,
+      role,
+      alignment: room.secrets[leaving.id].alignment,
+    });
+    errorCode(() => command(room, room.players[1].id, { type: 'dissolve' }), 'FORBIDDEN');
+    room = command(room, room.hostId, { type: 'dissolve' });
+    expect(room.players).toEqual([]);
+    expect(room.dissolvedAt).toBe(NOW);
+    expect(room.expiresAt).toBe(NOW);
   });
 });

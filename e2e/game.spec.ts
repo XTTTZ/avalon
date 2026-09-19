@@ -552,6 +552,130 @@ test('phone creates a standard room, edits extensions, and exposes a working inv
   }
 });
 
+test('lobby avatars and locked private tabs stay visually aligned', async ({ page }) => {
+  await page.goto('/');
+  await page.getByLabel('你的公开名字').fill('alice');
+  await page.getByRole('button', { name: '5', exact: true }).click();
+  await page.getByRole('button', { name: '创建房间', exact: true }).click();
+  await expect(page.locator('.player-seat.is-self .avatar-letter')).toHaveText('A');
+  const avatarCenters = await page.locator('.player-seat.is-self .avatar').evaluate((avatar) => {
+    const outer = avatar.getBoundingClientRect();
+    const letter = avatar.querySelector('.avatar-letter')!.getBoundingClientRect();
+    return {
+      x: Math.abs(outer.x + outer.width / 2 - (letter.x + letter.width / 2)),
+      y: Math.abs(outer.y + outer.height / 2 - (letter.y + letter.height / 2)),
+    };
+  });
+  expect(avatarCenters.x).toBeLessThan(0.5);
+  expect(avatarCenters.y).toBeLessThan(0.5);
+
+  const navBoxes = await page.locator('.bottom-nav button').evaluateAll((buttons) =>
+    buttons.map((button) => {
+      const box = button.getBoundingClientRect();
+      const icon = button.querySelector('svg')!.getBoundingClientRect();
+      return {
+        width: box.width,
+        height: box.height,
+        iconWidth: icon.width,
+        iconHeight: icon.height,
+      };
+    }),
+  );
+  expect(new Set(navBoxes.map(({ width }) => width)).size).toBe(1);
+  expect(new Set(navBoxes.map(({ height }) => height)).size).toBe(1);
+  expect(navBoxes.every(({ iconWidth, iconHeight }) => iconWidth === 22 && iconHeight === 22)).toBe(
+    true,
+  );
+
+  await page.getByRole('button', { name: '我的身份', exact: true }).click();
+  const identity = await page.locator('.locked-state:visible').boundingBox();
+  const identityLock = await page.locator('.locked-state:visible > svg').boundingBox();
+  await page.getByRole('button', { name: '私人笔记', exact: true }).click();
+  const notes = await page.locator('.locked-state:visible').boundingBox();
+  const notesLock = await page.locator('.locked-state:visible > svg').boundingBox();
+  expect(identity).not.toBeNull();
+  expect(notes).not.toBeNull();
+  expect(notes!.width).toBe(identity!.width);
+  expect(notes!.height).toBe(identity!.height);
+  expect(notesLock).toMatchObject({ width: identityLock!.width, height: identityLock!.height });
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      width,
+    );
+  }
+  await page.screenshot({ path: 'test-results/mobile-aligned-lock-state.png', fullPage: true });
+});
+
+test('finished players can exit immediately and the host can dissolve the room', async ({
+  page,
+  request,
+}) => {
+  const game = await prepare(request);
+  await game.command(0, { type: 'start' });
+  await game.command(0, { type: 'abort' });
+  await enter(page, game.sessions[1], game.code);
+  await page.setViewportSize({ width: 320, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  await page.getByRole('button', { name: '退出房间', exact: true }).click();
+  await page
+    .getByRole('dialog', { name: '退出房间？' })
+    .getByRole('button', { name: '确认', exact: true })
+    .click();
+  await expect(page.getByRole('button', { name: '创建房间', exact: true })).toBeVisible();
+  await expect(game.get(1)).rejects.toThrow('FORBIDDEN');
+
+  await enter(page, game.sessions[0], game.code);
+  await page.getByRole('button', { name: '解散房间', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: '解散房间？' });
+  await expect(confirmation).toContainText('所有玩家将立即退出');
+  await confirmation.getByRole('button', { name: '确认', exact: true }).click();
+  await expect(page.getByRole('button', { name: '创建房间', exact: true })).toBeVisible();
+  await expect(game.get(2)).rejects.toThrow('EXPIRED');
+});
+
+test('round report shows every public Lady holder without revealing alignments', async ({
+  page,
+  request,
+}) => {
+  const game = await prepare(request, 7);
+  const lobby = await game.get(0);
+  await game.command(0, { type: 'configure', config: { ...lobby.room.config, lady: true } });
+  await game.command(0, { type: 'start' });
+  for (let i = 0; i < 7; i++) await game.command(i, { type: 'ready' });
+  const passQuest = async () => {
+    let current = await game.get(0);
+    const leader = game.playerIds.indexOf(current.room.leaderId!);
+    const team = current.room.players
+      .slice(0, current.room.config.quests[current.room.round - 1].size)
+      .map((player) => player.id);
+    await game.command(leader, { type: 'propose', team });
+    for (let i = 0; i < 7; i++) await game.command(i, { type: 'teamVote', approve: true });
+    for (const playerId of team)
+      await game.command(game.playerIds.indexOf(playerId), { type: 'questVote', success: true });
+  };
+  await passQuest();
+  await passQuest();
+  const lady = await game.get(0);
+  expect(lady.room.phase).toBe('lady');
+  const holderId = lady.room.ladyHolderId!;
+  const target = lady.room.players.find((player) => !lady.room.ladyHistory.includes(player.id))!;
+  await game.command(game.playerIds.indexOf(holderId), { type: 'lady', targetId: target.id });
+  await enter(page, game.sessions[0], game.code);
+  await page.getByRole('button', { name: '圆桌战报', exact: true }).click();
+  const history = page.locator('.history-group').filter({
+    has: page.getByRole('heading', { name: '湖中仙女', exact: true }),
+  });
+  await expect(history).toContainText('初始持有人');
+  await expect(history).toContainText('第 1 次交接');
+  await expect(history).toContainText(
+    lady.room.players.find((player) => player.id === holderId)!.name,
+  );
+  await expect(history).toContainText(target.name);
+  await expect(history.locator('.lady-history-card')).not.toContainText(/好人|坏人/);
+  await page.screenshot({ path: 'test-results/mobile-lady-history.png', fullPage: true });
+});
+
 test('a lost mutation response can be retried with its original id without applying twice', async ({
   page,
   request,
