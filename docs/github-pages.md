@@ -17,7 +17,7 @@
 3. 在 CloudBase 云函数 `avalon` 的环境变量 `ALLOWED_ORIGINS` 中追加 `https://www.avalonxty.site`。本次也保留旧 CloudBase origin，并允许 `https://xtttz.github.io`，以后取消自定义域名时可用。以英文逗号分隔，不要填写路径或尾斜杠，其他密钥保持原值。
 4. 打开 [Pages 工作流](https://github.com/XTTTZ/avalon/actions/workflows/pages.yml)，选择 **Run workflow → main → Run workflow**。等 `verify`、`build`、`deploy` 都变绿，打开上面的网页地址。
 
-Pages 发布不需要新增 GitHub Token 或 CloudBase Secret。工作流使用 GitHub 自动提供的短期发布权限，只上传 `dist/` 网页；部署之前检查 CloudBase 的认证边界和跨域设置。检查通过代表 API 可以访问，数据库登录、建房仍需实际验收。
+Pages 发布不需要新增 GitHub Token 或 CloudBase Secret。工作流使用 GitHub 自动提供的短期发布权限，只上传 `dist/` 网页；部署时会检查 CloudBase 的认证边界和跨域设置。该检查失败会显示警告，但不会阻止静态网页发布，避免 CloudBase 临时停机或余额不足时连网页修复也无法上线。检查通过只代表 API 可以访问，数据库登录、建房仍需实际验收。
 
 ## 以后更新
 
@@ -40,6 +40,7 @@ guest 身份按网站来源保存。第一次从旧 CloudBase 网址切到 Pages
 - **Get Pages site failed / Not Found**：检查第 1 步，确认仓库是 public、Pages 来源为 GitHub Actions。
 - **Set the repository variable API_URL**：检查第 2 步，API 地址必须完整，不能填 `/api`。
 - **Allowed origin is not configured / Authentication boundary failed**：检查第 3 步，以及 CloudBase 云函数配置是否保存成功。
+- **AvailableStatus = InsufficientBalance**：CloudBase 已停用云函数实例。进入腾讯云控制台检查环境套餐、资源包、欠费和账户余额；恢复后重新运行 **Deploy CloudBase**，确认 API 检查通过。
 - 网页能打开但提示 **服务暂时不可用**：检查云函数的 `PG_API_KEY` 是否有效。更新 GitHub 的部署 Secret 不会自动更新云函数环境变量，参考 [Key 轮换说明](your-deployment.md#api-key-轮换)。
 
 当前已绑定 `www.avalonxty.site`，无需重复修改 DNS。以后改域名时，在 Pages 设置完成域名、DNS 和 HTTPS 配置，再把新 origin 追加到 CloudBase。取消自定义域名后，重新运行工作流发布到 [默认 Pages 地址](https://xtttz.github.io/avalon/)。
