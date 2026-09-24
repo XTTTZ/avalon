@@ -156,7 +156,7 @@ test('holding identity keeps the card and button fixed even with long private in
   await game.command(0, { type: 'start' });
   const views = await Promise.all(game.sessions.map((_, index) => game.get(index)));
   const merlinIndex = views.findIndex((view) => view.self.role === 'merlin');
-  expect(views[merlinIndex].self.knownPlayers).toHaveLength(4);
+  expect(views[merlinIndex].self.knownPlayers).toHaveLength(3);
   await page.setViewportSize({ width: 320, height: 568 });
   await enter(page, game.sessions[merlinIndex], game.code);
   await page
@@ -177,7 +177,7 @@ test('holding identity keeps the card and button fixed even with long private in
   );
   await page.mouse.down();
   await expect(card.locator('.secret-content')).toBeVisible();
-  await expect(card.locator('.known-players > div')).toHaveCount(4);
+  await expect(card.locator('.known-players > div')).toHaveCount(3);
   expect(await hold.boundingBox()).toEqual(buttonBefore);
   expect(await card.boundingBox()).toEqual(cardBefore);
   // Extra information scrolls inside the card instead of pushing the held control away.
@@ -519,11 +519,46 @@ test('phone creates a standard room, edits extensions, and exposes a working inv
   await page.getByRole('button', { name: '创建房间', exact: true }).click();
   await expect(page.getByRole('heading', { name: '游戏大厅' })).toBeVisible();
   await expect(page.getByRole('button', { name: /开始游戏/ })).toBeDisabled();
+  const defaultEvilRoles = page.locator('.faction-group.evil');
+  await expect(defaultEvilRoles).toContainText('奥伯伦');
+  await expect(defaultEvilRoles).not.toContainText('爪牙');
   await page.getByRole('button', { name: '调整', exact: true }).click();
   const rules = page.getByRole('dialog', { name: '设置本局规则' });
-  await rules.getByLabel('兰斯洛特扩展').selectOption('fixed');
+  await rules.getByRole('button', { name: '自定义规则', exact: true }).click();
+  await rules.getByRole('button', { name: '增加莫德雷德人数' }).click();
+  await expect(rules.getByText('8/7 人 · 好 4 / 坏 4', { exact: true })).toBeVisible();
+  await rules.getByRole('button', { name: '减少奥伯伦人数' }).click();
+  await expect(rules.getByText('7/7 人 · 好 4 / 坏 3', { exact: true })).toBeVisible();
+  const mordredCount = rules.getByRole('spinbutton', { name: '莫德雷德人数', exact: true });
+  const oberonCount = rules.getByRole('spinbutton', { name: '奥伯伦人数', exact: true });
+  await expect(mordredCount).toHaveValue('1');
+  await expect(oberonCount).toHaveValue('0');
+  await mordredCount.fill('');
+  await expect(mordredCount).toHaveValue('');
+  await mordredCount.fill('1');
+  await expect(mordredCount).toHaveValue('1');
+  await expect(rules.getByText('7/7 人 · 好 4 / 坏 3', { exact: true })).toBeVisible();
   await rules.getByLabel('兰斯洛特扩展').selectOption('changing');
+  await expect(mordredCount).toHaveValue('0');
+  await expect(rules.getByRole('spinbutton', { name: '忠臣人数', exact: true })).toHaveValue('1');
+  await expect(rules.getByText('7/7 人 · 好 4 / 坏 3', { exact: true })).toBeVisible();
   await rules.getByLabel('湖中仙女', { exact: false }).check();
+  await page.setViewportSize({ width: 320, height: 844 });
+  const modalSize = await rules.evaluate((dialog) => ({
+    clientWidth: dialog.clientWidth,
+    scrollWidth: dialog.scrollWidth,
+  }));
+  expect(modalSize.scrollWidth).toBeLessThanOrEqual(modalSize.clientWidth);
+  const stepButtons = await rules
+    .locator('.number-stepper > button:visible')
+    .evaluateAll((buttons) =>
+      buttons.map((button) => {
+        const box = button.getBoundingClientRect();
+        return { width: box.width, height: box.height };
+      }),
+    );
+  expect(stepButtons.every(({ width, height }) => width >= 44 && height >= 44)).toBe(true);
+  await page.screenshot({ path: 'test-results/mobile-rule-steppers.png', fullPage: true });
   await rules.getByRole('button', { name: '保存规则' }).click();
   await expect(rules).toHaveCount(0);
   await expect(page.getByText('兰斯洛特：阵营变化', { exact: false })).toBeVisible();

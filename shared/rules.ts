@@ -73,13 +73,53 @@ export const STANDARD_EVIL_COUNTS: Readonly<Record<number, number>> = {
   10: 4,
 };
 
+/** Common Chinese reference setup. The rulebook fixes team counts, while these roles are recommended. */
+export const STANDARD_ROLES: Readonly<Partial<Record<number, readonly Role[]>>> = {
+  5: ['merlin', 'percival', 'loyalist', 'morgana', 'assassin'],
+  6: ['merlin', 'percival', 'loyalist', 'loyalist', 'morgana', 'assassin'],
+  7: ['merlin', 'percival', 'loyalist', 'loyalist', 'morgana', 'assassin', 'oberon'],
+  8: ['merlin', 'percival', 'loyalist', 'loyalist', 'loyalist', 'morgana', 'assassin', 'minion'],
+  9: [
+    'merlin',
+    'percival',
+    'loyalist',
+    'loyalist',
+    'loyalist',
+    'loyalist',
+    'morgana',
+    'assassin',
+    'mordred',
+  ],
+  10: [
+    'merlin',
+    'percival',
+    'loyalist',
+    'loyalist',
+    'loyalist',
+    'loyalist',
+    'morgana',
+    'assassin',
+    'oberon',
+    'mordred',
+  ],
+};
+
 /** 11–12 are deliberately labelled custom; their tables are this app's house defaults. */
 export function standardConfig(playerCount: number): GameConfig {
   integer(playerCount, 5, 12, '玩家人数');
   const evilCount = STANDARD_EVIL_COUNTS[playerCount] ?? 4;
-  const roles: Role[] = ['merlin', 'percival', 'assassin', 'morgana'];
-  roles.push(...Array<Role>(playerCount - evilCount - 2).fill('loyalist'));
-  roles.push(...Array<Role>(evilCount - 2).fill('minion'));
+  const defaultRoles = STANDARD_ROLES[playerCount];
+  const roles: Role[] = defaultRoles
+    ? [...defaultRoles]
+    : [
+        'merlin',
+        'percival',
+        ...Array<Role>(playerCount - evilCount - 2).fill('loyalist'),
+        'morgana',
+        'assassin',
+        'mordred',
+        'oberon',
+      ];
   return {
     preset: playerCount <= 10 ? 'standard' : 'custom',
     playerCount,

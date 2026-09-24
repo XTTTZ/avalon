@@ -63,23 +63,71 @@ function errorCode(fn: () => unknown, code: string) {
 
 describe('configuration', () => {
   it.each([
-    [5, 2, [2, 3, 2, 3, 3]],
-    [6, 2, [2, 3, 4, 3, 4]],
-    [7, 3, [2, 3, 3, 4, 4]],
-    [8, 3, [3, 4, 4, 5, 5]],
-    [9, 3, [3, 4, 4, 5, 5]],
-    [10, 4, [3, 4, 4, 5, 5]],
-  ] as const)('uses the official %i-player table', (count, evil, sizes) => {
-    const config = validateConfig(standardConfig(count));
-    expect(config.evilCount).toBe(evil);
-    expect(config.quests.map((q) => q.size)).toEqual(sizes);
-    expect(config.quests.map((q) => q.failsRequired)).toEqual([1, 1, 1, count >= 7 ? 2 : 1, 1]);
-    expect(config.rejectionLimit).toBe(5);
-  });
+    [5, 2, [2, 3, 2, 3, 3], ['merlin', 'percival', 'loyalist', 'morgana', 'assassin']],
+    [6, 2, [2, 3, 4, 3, 4], ['merlin', 'percival', 'loyalist', 'loyalist', 'morgana', 'assassin']],
+    [
+      7,
+      3,
+      [2, 3, 3, 4, 4],
+      ['merlin', 'percival', 'loyalist', 'loyalist', 'morgana', 'assassin', 'oberon'],
+    ],
+    [
+      8,
+      3,
+      [3, 4, 4, 5, 5],
+      ['merlin', 'percival', 'loyalist', 'loyalist', 'loyalist', 'morgana', 'assassin', 'minion'],
+    ],
+    [
+      9,
+      3,
+      [3, 4, 4, 5, 5],
+      [
+        'merlin',
+        'percival',
+        'loyalist',
+        'loyalist',
+        'loyalist',
+        'loyalist',
+        'morgana',
+        'assassin',
+        'mordred',
+      ],
+    ],
+    [
+      10,
+      4,
+      [3, 4, 4, 5, 5],
+      [
+        'merlin',
+        'percival',
+        'loyalist',
+        'loyalist',
+        'loyalist',
+        'loyalist',
+        'morgana',
+        'assassin',
+        'oberon',
+        'mordred',
+      ],
+    ],
+  ] as const)(
+    'uses the standard %i-player table and recommended roles',
+    (count, evil, sizes, roles) => {
+      const config = validateConfig(standardConfig(count));
+      expect(config.evilCount).toBe(evil);
+      expect(config.roles).toEqual(roles);
+      expect(config.quests.map((q) => q.size)).toEqual(sizes);
+      expect(config.quests.map((q) => q.failsRequired)).toEqual([1, 1, 1, count >= 7 ? 2 : 1, 1]);
+      expect(config.rejectionLimit).toBe(5);
+    },
+  );
   it.each([11, 12])(
     'labels %i-player defaults as extensions and supports a whole game',
     (count) => {
       expect(standardConfig(count).preset).toBe('custom');
+      expect(standardConfig(count).roles).toContain('mordred');
+      expect(standardConfig(count).roles).toContain('oberon');
+      expect(standardConfig(count).roles).not.toContain('minion');
       let room = start(standardConfig(count));
       for (let i = 0; i < 3; i++) room = quest(room);
       expect(room.phase).toBe('assassination');

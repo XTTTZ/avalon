@@ -124,6 +124,48 @@ input[readonly] {
 input[type='number'] {
   padding: 8px;
 }
+.number-stepper {
+  display: grid;
+  grid-template-columns: 44px minmax(42px, 1fr) 44px;
+  width: 100%;
+  min-width: 130px;
+  min-height: 48px;
+  overflow: hidden;
+  border: 1px solid #cdd8cf;
+  border-radius: 8px;
+  background: #fff;
+}
+.number-stepper:focus-within {
+  border-color: #8baf97;
+  box-shadow: 0 0 0 1px #8baf97;
+}
+.number-stepper > button {
+  display: grid;
+  min-width: 44px;
+  min-height: 48px;
+  place-items: center;
+  color: var(--forest);
+  background: var(--forest-light);
+}
+.number-stepper > button:active:not(:disabled) {
+  background: #d9e9dc;
+}
+.number-stepper > input {
+  min-height: 46px;
+  padding: 8px 2px;
+  border: 0;
+  border-right: 1px solid #cdd8cf;
+  border-left: 1px solid #cdd8cf;
+  border-radius: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.number-stepper > input:focus {
+  outline: 0;
+}
+.number-stepper.disabled {
+  background: #f3f5f1;
+}
 input[type='checkbox'] {
   width: 24px;
   min-height: 24px;
@@ -1538,10 +1580,9 @@ summary::-webkit-details-marker {
   color: var(--muted);
   margin-top: 3px;
 }
-.role-row input {
-  width: 52px;
+.role-row .number-stepper {
+  width: 150px;
   flex-shrink: 0;
-  text-align: center;
 }
 .toggle-row {
   display: flex;
@@ -1599,8 +1640,8 @@ summary::-webkit-details-marker {
   border-top: 1px solid var(--line);
   font-size: 15px;
 }
-.quest-editor-row input {
-  text-align: center;
+.quest-editor-row .number-stepper {
+  min-width: 0;
 }
 .sticky-modal-actions {
   display: flex;
@@ -1848,6 +1889,26 @@ summary::-webkit-details-marker {
   .modal.wide {
     max-width: none;
   }
+  .role-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .role-row {
+    min-height: 66px;
+  }
+  .role-row .number-stepper {
+    width: 154px;
+  }
+  .quest-editor-head {
+    display: none;
+  }
+  .quest-editor-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .quest-editor-row > span {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
   .sticky-modal-actions {
     bottom: calc(-16px - env(safe-area-inset-bottom, 0px));
     padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px));
@@ -1875,7 +1936,7 @@ summary::-webkit-details-marker {
     justify-content: flex-start;
     gap: 7px 14px;
   }
-  .role-editor {
+  .form-grid {
     grid-template-columns: minmax(0, 1fr);
   }
   .rules-editor .subheading {

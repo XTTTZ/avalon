@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { GameConfig, Role } from '../../shared/types';
 import { ROLE_META, standardConfig, validateConfig } from '../../shared/rules';
+import { NumberStepper } from './NumberStepper';
 
 const editableRoles: Role[] = [
   'merlin',
@@ -28,36 +29,60 @@ export function RulesEditor({
     () => JSON.parse(JSON.stringify(initial)) as GameConfig,
   );
   const [error, setError] = useState('');
+  const lancelotReplacements = useRef<{
+    good: Role;
+    evil: Role;
+  } | null>(null);
   const custom = config.preset === 'custom';
   const change = (patch: Partial<GameConfig>) => {
     setError('');
     setConfig((value) => ({ ...value, ...patch }));
   };
-  const setRoleCount = (role: Role, count: number) =>
-    change({
+  const setRoleCount = (role: Role, count: number) => {
+    setError('');
+    setConfig((value) => ({
+      ...value,
       roles: [
-        ...config.roles.filter((r) => r !== role),
+        ...value.roles.filter((candidate) => candidate !== role),
         ...Array.from({ length: Math.max(0, Math.min(12, count)) }, () => role),
       ],
-    });
+    }));
+  };
+  const resetToStandard = (playerCount: number) => {
+    setError('');
+    lancelotReplacements.current = null;
+    setConfig(standardConfig(playerCount));
+  };
   const setLancelot = (mode: GameConfig['lancelot']) => {
-    if (mode !== 'off' && config.lancelot !== 'off') {
-      change({ lancelot: mode });
-      return;
-    }
-    const roles: Role[] = config.roles.filter(
-      (r) => r !== 'lancelot_good' && r !== 'lancelot_evil',
-    );
-    if (mode !== 'off') {
-      const good = roles.lastIndexOf('loyalist');
-      if (good >= 0) roles.splice(good, 1);
-      const evil = roles.lastIndexOf('minion');
-      if (evil >= 0) roles.splice(evil, 1);
-      roles.push('lancelot_good', 'lancelot_evil');
-    } else if (config.lancelot !== 'off') {
-      roles.push('loyalist', 'minion');
-    }
-    change({ lancelot: mode, roles });
+    setError('');
+    setConfig((current) => {
+      if (mode !== 'off' && current.lancelot !== 'off') return { ...current, lancelot: mode };
+      const roles: Role[] = current.roles.filter(
+        (role) => role !== 'lancelot_good' && role !== 'lancelot_evil',
+      );
+      if (mode !== 'off') {
+        const good = roles.lastIndexOf('loyalist');
+        const evilRole = (['minion', 'oberon', 'mordred', 'morgana'] as Role[]).find((role) =>
+          roles.includes(role),
+        );
+        const evil = evilRole ? roles.lastIndexOf(evilRole) : -1;
+        if (good < 0 || evil < 0) {
+          queueMicrotask(() => setError('启用兰斯洛特需要至少一名忠臣和一名可替换的坏人'));
+          return current;
+        }
+        lancelotReplacements.current = { good: roles[good], evil: roles[evil] };
+        roles.splice(Math.max(good, evil), 1);
+        roles.splice(Math.min(good, evil), 1);
+        roles.push('lancelot_good', 'lancelot_evil');
+      } else if (current.lancelot !== 'off') {
+        roles.push(
+          lancelotReplacements.current?.good ?? 'loyalist',
+          lancelotReplacements.current?.evil ?? 'minion',
+        );
+        lancelotReplacements.current = null;
+      }
+      return { ...current, lancelot: mode, roles };
+    });
   };
   const save = async () => {
     try {
@@ -74,7 +99,7 @@ export function RulesEditor({
         游戏人数
         <select
           value={config.playerCount}
-          onChange={(e) => setConfig(standardConfig(Number(e.target.value)))}
+          onChange={(e) => resetToStandard(Number(e.target.value))}
         >
           {Array.from({ length: 8 }, (_, i) => i + 5).map((n) => (
             <option key={n} value={n}>
@@ -87,7 +112,7 @@ export function RulesEditor({
         <button
           className={!custom ? 'selected' : ''}
           disabled={config.playerCount > 10}
-          onClick={() => setConfig(standardConfig(config.playerCount))}
+          onClick={() => resetToStandard(config.playerCount)}
         >
           标准规则
         </button>
@@ -102,12 +127,12 @@ export function RulesEditor({
         <div className="form-grid">
           <label className="field">
             坏人人数
-            <input
-              type="number"
+            <NumberStepper
+              label="坏人人数"
               min={1}
               max={Math.floor((config.playerCount - 1) / 2)}
               value={config.evilCount}
-              onChange={(e) => change({ evilCount: Number(e.target.value) })}
+              onChange={(evilCount) => change({ evilCount })}
             />
           </label>
           <label className="field">
@@ -116,22 +141,22 @@ export function RulesEditor({
           </label>
           <label className="field">
             获胜所需任务数
-            <input
-              type="number"
+            <NumberStepper
+              label="获胜所需任务数"
               min={2}
               max={Math.floor((config.quests.length + 1) / 2)}
               value={config.winsRequired}
-              onChange={(e) => change({ winsRequired: Number(e.target.value) })}
+              onChange={(winsRequired) => change({ winsRequired })}
             />
           </label>
           <label className="field">
             连续拒绝上限
-            <input
-              type="number"
+            <NumberStepper
+              label="连续拒绝上限"
               min={1}
               max={10}
               value={config.rejectionLimit}
-              onChange={(e) => change({ rejectionLimit: Number(e.target.value) })}
+              onChange={(rejectionLimit) => change({ rejectionLimit })}
             />
           </label>
         </div>
@@ -156,13 +181,12 @@ export function RulesEditor({
               <strong>{ROLE_META[role].name}</strong>
               <small>{ROLE_META[role].alignment === 'good' ? '好人' : '坏人'}</small>
             </span>
-            <input
-              aria-label={`${ROLE_META[role].name}人数`}
-              type="number"
+            <NumberStepper
+              label={`${ROLE_META[role].name}人数`}
               min={0}
               max={role === 'loyalist' || role === 'minion' ? 12 : 1}
               value={config.roles.filter((r) => r === role).length}
-              onChange={(e) => setRoleCount(role, Number(e.target.value))}
+              onChange={(count) => setRoleCount(role, count)}
             />
           </label>
         ))}
@@ -191,7 +215,7 @@ export function RulesEditor({
       </label>
       {config.lancelot !== 'off' && (
         <p className="notice small">
-          成对加入，替换忠臣和爪牙。变化模式从第 3 轮起抽牌，可能交换阵营。本应用扩展。
+          成对加入，替换一名忠臣和一名坏人。变化模式从第 3 轮起抽牌，可能交换阵营。本应用扩展。
         </p>
       )}
       <div className="subheading">
@@ -232,33 +256,27 @@ export function RulesEditor({
         {config.quests.map((quest, index) => (
           <div className="quest-editor-row" key={index}>
             <span>第 {index + 1} 轮</span>
-            <input
-              aria-label={`第${index + 1}轮人数`}
-              type="number"
+            <NumberStepper
+              label={`第${index + 1}轮人数`}
               disabled={!custom}
               min={1}
               max={config.playerCount}
               value={quest.size}
-              onChange={(e) =>
+              onChange={(size) =>
                 change({
-                  quests: config.quests.map((q, i) =>
-                    i === index ? { ...q, size: Number(e.target.value) } : q,
-                  ),
+                  quests: config.quests.map((q, i) => (i === index ? { ...q, size } : q)),
                 })
               }
             />
-            <input
-              aria-label={`第${index + 1}轮失败票门槛`}
-              type="number"
+            <NumberStepper
+              label={`第${index + 1}轮失败票门槛`}
               disabled={!custom}
               min={1}
               max={Math.min(quest.size, config.evilCount)}
               value={quest.failsRequired}
-              onChange={(e) =>
+              onChange={(failsRequired) =>
                 change({
-                  quests: config.quests.map((q, i) =>
-                    i === index ? { ...q, failsRequired: Number(e.target.value) } : q,
-                  ),
+                  quests: config.quests.map((q, i) => (i === index ? { ...q, failsRequired } : q)),
                 })
               }
             />
