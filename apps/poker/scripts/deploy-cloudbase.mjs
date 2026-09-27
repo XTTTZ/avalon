@@ -101,8 +101,19 @@ try {
 
   const validate = command(['validate', '--env-id', envId], { env: deploymentEnv });
   if (validate.status !== 0) process.exit(validate.status ?? 1);
-  const deploy = command(['deploy', '--env-id', envId, '--yes'], { env: deploymentEnv });
-  if (deploy.status !== 0) process.exit(deploy.status ?? 1);
+  const migrations = command(['db', 'pg', 'migration', 'up', '--env-id', envId], {
+    env: deploymentEnv,
+  });
+  if (migrations.status !== 0) process.exit(migrations.status ?? 1);
+  const deployFunction = command(
+    ['fn', 'deploy', 'poker', '--deployMode', 'zip', '--force', '--yes', '--env-id', envId],
+    { env: deploymentEnv },
+  );
+  if (deployFunction.status !== 0) process.exit(deployFunction.status ?? 1);
+  const deployGateway = command(['deploy', '--only=gateway', '--env-id', envId, '--yes'], {
+    env: deploymentEnv,
+  });
+  if (deployGateway.status !== 0) process.exit(deployGateway.status ?? 1);
 } finally {
   rmSync(workspace, { recursive: true, force: true });
 }

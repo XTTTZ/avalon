@@ -39,7 +39,7 @@ npm run check
 
 Poker 使用独立会话密钥、数据库表、函数和构建产物。生产环境设置 `POKER_SESSION_SECRET`、`POKER_IDENTITY_SECRET`、`PG_REST_URL`、`PG_API_KEY`、`ALLOWED_ORIGINS=https://www.avalonxty.site` 及 `ALLOW_GUEST=true`。密钥不得写入代码或 `VITE_` 变量。
 
-`.github/workflows/deploy-poker.yml` 会依次执行 PostgreSQL 迁移、部署 `poker` 函数、创建 `/api/poker` 路由并做线上冒烟检查。数据库连接参数从现有 `avalon` 函数读取；Poker 会话密钥首次部署时单独生成，后续从 `poker` 函数保留。
+`.github/workflows/deploy-poker.yml` 会依次执行 PostgreSQL 迁移、以 ZIP 直传模式部署 `poker` 函数、创建 `/api/poker` 路由并做线上冒烟检查。数据库连接参数从现有 `avalon` 函数读取；Poker 会话密钥首次部署时单独生成，后续从 `poker` 函数保留。
 
 若当前 CloudBase 环境使用同一个静态托管目录，可在仓库根目录生成联合产物：
 
