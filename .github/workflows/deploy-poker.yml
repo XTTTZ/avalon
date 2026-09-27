@@ -1,0 +1,79 @@
+name: Deploy Poker CloudBase
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/poker/**'
+      - '.github/workflows/deploy-poker.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: poker-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: apps/poker
+    env:
+      TCB_ENV_ID: ${{ vars.TCB_ENV_ID }}
+      TCB_REGION: ${{ vars.TCB_REGION }}
+      WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
+      AVALON_API_URL: ${{ vars.API_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/poker/package-lock.json
+      - name: Check deployment variables
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          for (const name of ['TCB_ENV_ID', 'TCB_REGION', 'WEB_ORIGIN', 'AVALON_API_URL'])
+            if (!process.env[name]?.trim()) throw new Error(`Missing repository variable: ${name}`);
+          const origin = new URL(process.env.WEB_ORIGIN);
+          const api = new URL(process.env.AVALON_API_URL);
+          if (origin.origin !== process.env.WEB_ORIGIN || origin.protocol !== 'https:')
+            throw new Error('WEB_ORIGIN must be an exact HTTPS origin.');
+          if (api.protocol !== 'https:' || api.pathname !== '/api/avalon')
+            throw new Error('API_URL must end in /api/avalon.');
+          api.pathname = '/api/poker';
+          appendFileSync(process.env.GITHUB_ENV, `POKER_API_URL=${api.href}\n`);
+          JS
+      - name: Install and verify Poker
+        run: |
+          npm ci
+          npm run format:check
+          npm run check
+          npm ci --prefix cloudfunctions/poker --omit=dev
+      - name: Install pinned CloudBase CLI
+        run: npm install --global @cloudbase/cli@3.8.2
+      - name: Log in with deployment credentials
+        env:
+          CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+          CLOUDBASE_API_ENDPOINT: https://${{ vars.TCB_ENV_ID }}.${{ vars.TCB_REGION }}.tcb-api.tencentcloudapi.com
+          TCB_SECRET_ID: ${{ secrets.TCB_SECRET_ID }}
+          TCB_SECRET_KEY: ${{ secrets.TCB_SECRET_KEY }}
+        run: |
+          if test -n "$CLOUDBASE_API_KEY"; then
+            tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$TCB_ENV_ID" -r "$TCB_REGION"
+          else
+            test -n "$TCB_SECRET_ID" || { echo 'Missing CLOUDBASE_API_KEY or TCB_SECRET_ID'; exit 1; }
+            test -n "$TCB_SECRET_KEY" || { echo 'Missing repository secret: TCB_SECRET_KEY'; exit 1; }
+            tcb login --apiKeyId "$TCB_SECRET_ID" --apiKey "$TCB_SECRET_KEY"
+          fi
+      - name: Deploy database, function, and route
+        run: node scripts/deploy-cloudbase.mjs
+      - name: Check published Poker API
+        run: node scripts/smoke-cloud.mjs

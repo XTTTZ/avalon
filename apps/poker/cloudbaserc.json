@@ -1,0 +1,54 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "version": "2.1",
+  "envId": "{{env.TCB_ENV_ID}}",
+  "functionRoot": "./cloudfunctions",
+  "database": {
+    "type": "postgresql",
+    "migrations": "./cloudbase/migrations"
+  },
+  "functions": [
+    {
+      "name": "poker",
+      "type": "Event",
+      "runtime": "Nodejs20.19",
+      "handler": "index.main",
+      "timeout": 20,
+      "memorySize": 256,
+      "installDependency": false,
+      "ignore": [".DS_Store"],
+      "envVariables": {
+        "PG_REST_URL": "{{env.PG_REST_URL}}",
+        "PG_API_KEY": "{{env.PG_API_KEY}}",
+        "POKER_SESSION_SECRET": "{{env.POKER_SESSION_SECRET}}",
+        "POKER_IDENTITY_SECRET": "{{env.POKER_IDENTITY_SECRET}}",
+        "ALLOWED_ORIGINS": "{{env.WEB_ORIGIN}}",
+        "ALLOW_GUEST": "true"
+      },
+      "triggers": [
+        {
+          "name": "poker-cleanup",
+          "type": "timer",
+          "config": "0 0 2 * * * *"
+        }
+      ]
+    }
+  ],
+  "gateway": {
+    "routes": [
+      {
+        "path": "/api/poker",
+        "target": "function:poker",
+        "enableAuth": false,
+        "enablePathTransmission": false,
+        "qpsPolicy": {
+          "qpsTotal": 1000,
+          "qpsPerClient": {
+            "limitBy": "ClientIP",
+            "limitValue": 20
+          }
+        }
+      }
+    ]
+  }
+}

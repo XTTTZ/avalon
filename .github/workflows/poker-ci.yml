@@ -1,0 +1,42 @@
+name: Poker CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/poker/**'
+      - '.github/workflows/poker-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/poker/**'
+      - '.github/workflows/poker-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: apps/poker
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/poker/package-lock.json
+      - name: Install Poker dependencies
+        run: npm ci
+      - name: Check formatting
+        run: npm run format:check
+      - name: Check types and rules
+        run: npm run check
+      - name: Check independent function package
+        run: npm ci --prefix cloudfunctions/poker --omit=dev

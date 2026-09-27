@@ -1,5 +1,7 @@
 # 阿瓦隆手机版 Web App 实施计划
 
+> 并列应用：德州扑克数字筹码 / 荷官辅助应用的设计、实施状态与云端验收清单见 [apps/poker/plan.md](apps/poker/plan.md)（2026-09-25）。
+
 ## 目标与交付
 
 实现供朋友线下面对面使用的 React + TypeScript Web App。公众号菜单打开 HTTPS 网页，生产后端使用 Tencent CloudBase 云函数和文档数据库，无需自建服务器。本地使用同一套游戏引擎和文件持久化 API，开发不依赖微信或云账号。

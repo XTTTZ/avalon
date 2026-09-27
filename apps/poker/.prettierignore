@@ -1,0 +1,6 @@
+node_modules
+.data
+dist
+cloudfunctions/poker/index.js
+package-lock.json
+cloudfunctions/poker/package-lock.json

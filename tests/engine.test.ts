@@ -820,7 +820,8 @@ describe('card order and host removals', () => {
       role,
       alignment: room.secrets[leaving.id].alignment,
     });
-    errorCode(() => command(room, room.players[1].id, { type: 'dissolve' }), 'FORBIDDEN');
+    const nonHost = room.players.find((player) => player.id !== room.hostId)!;
+    errorCode(() => command(room, nonHost.id, { type: 'dissolve' }), 'FORBIDDEN');
     room = command(room, room.hostId, { type: 'dissolve' });
     expect(room.players).toEqual([]);
     expect(room.dissolvedAt).toBe(NOW);

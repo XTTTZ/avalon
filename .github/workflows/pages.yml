@@ -51,6 +51,19 @@ jobs:
         env:
           PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
         run: npx vite build --base "${PAGES_BASE_PATH}/"
+      - name: Build Poker alongside Avalon
+        run: |
+          POKER_API_URL="${VITE_API_URL%/api/avalon}/api/poker"
+          export POKER_API_URL
+          node --input-type=module <<'JS'
+          const api = new URL(process.env.POKER_API_URL);
+          if (api.protocol !== 'https:' || api.username || api.password || api.search || api.hash || !api.pathname.endsWith('/api/poker'))
+            throw new Error('API_URL must allow deriving an HTTPS Poker API ending in /api/poker.');
+          JS
+          npm ci --prefix apps/poker
+          npm test --prefix apps/poker
+          VITE_API_URL="$POKER_API_URL" npm run build --prefix apps/poker
+          node scripts/assemble-poker-static.mjs
       - name: Check CloudBase API availability
         continue-on-error: true
         env:
