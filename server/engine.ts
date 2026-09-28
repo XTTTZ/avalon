@@ -373,7 +373,7 @@ function resolveQuest(room: RoomState, now: number) {
   if (goodWins >= room.config.winsRequired) {
     if (Object.values(room.secrets).some((s) => s.role === 'assassin')) {
       transition(room, 'assassination');
-      event(room, '好人达成任务条件，等待刺客选择梅林', now);
+      event(room, '好人达成任务条件；刺客尚未行动，进入最终刺杀', now);
       return;
     }
     return finish(room, 'good', '好人达成任务成功胜利条件', now);
@@ -628,7 +628,11 @@ export function applyCommand(
       break;
     }
     case 'assassinate': {
-      requirePhase(room, 'assassination');
+      ensure(
+        room.phase !== 'lobby' && room.phase !== 'finished',
+        'CONFLICT',
+        '本局尚未开始或已经结束',
+      );
       ensure(room.secrets[player.id].role === 'assassin', 'FORBIDDEN', '只有刺客可以刺杀');
       const chosen = target(room, command.targetId);
       ensure(chosen.id !== player.id, 'INVALID', '不能刺杀自己');
@@ -798,7 +802,8 @@ export function projectRoom(source: RoomState, userId: string): RoomView {
       teamVote: Object.hasOwn(source.teamBallots, player.id) ? source.teamBallots[player.id] : null,
       questSubmitted: Object.hasOwn(source.questBallots, player.id),
       ladyResults: secret?.ladyResults ?? [],
-      canAssassinate: source.phase === 'assassination' && secret?.role === 'assassin',
+      canAssassinate:
+        source.phase !== 'lobby' && source.phase !== 'finished' && secret?.role === 'assassin',
     },
   };
   return structuredClone(view);

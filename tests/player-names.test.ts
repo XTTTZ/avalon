@@ -121,7 +121,7 @@ describe('legacy event names', () => {
       seat,
     }));
     const notes = Object.fromEntries(roleNames.map((player) => [player.id, note('好友')]));
-    const message = '好人达成任务条件，等待刺客选择梅林';
+    const message = '好人达成任务条件；刺客尚未行动，进入最终刺杀';
     expect(render(event(message), roleNames, notes)).toBe(message);
     expect(render(event('备注：小明 加入了房间'), players, { p1: note('好友') })).toBe(
       '备注：小明 加入了房间',

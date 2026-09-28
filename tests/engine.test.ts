@@ -573,6 +573,56 @@ describe('team votes and quests', () => {
     expect(room.winner).toBe(hit ? 'evil' : 'good');
     expect(view(room, merlin.id).room.revealedRoles).toHaveLength(5);
   });
+  it('lets only the assassin strike during every active phase and ends the game immediately', () => {
+    const reveal = start(standardConfig(5), false);
+    const team = start();
+    const teamVote = command(team, team.leaderId!, {
+      type: 'propose',
+      team: teamWithEvil(team),
+    });
+    const questVote = approveTeam(start());
+    let lady = start({ ...standardConfig(5), lady: true });
+    lady = quest(quest(lady));
+    let assassination = start();
+    for (let index = 0; index < 3; index++) assassination = quest(assassination);
+
+    for (const [expectedPhase, active] of [
+      ['reveal', reveal],
+      ['team', team],
+      ['teamVote', teamVote],
+      ['questVote', questVote],
+      ['lady', lady],
+      ['assassination', assassination],
+    ] as const) {
+      expect(active.phase).toBe(expectedPhase);
+      const assassin = byRole(active, 'assassin');
+      const merlin = byRole(active, 'merlin');
+      expect(view(active, assassin.id).self.canAssassinate).toBe(true);
+      for (const player of active.players.filter((candidate) => candidate.id !== assassin.id))
+        expect(view(active, player.id).self.canAssassinate).toBe(false);
+      const finished = command(active, assassin.id, {
+        type: 'assassinate',
+        targetId: merlin.id,
+      });
+      expect(finished.phase).toBe('finished');
+      expect(finished.winner).toBe('evil');
+      expect(finished.assassinationTargetId).toBe(merlin.id);
+    }
+
+    const lobby = fullRoom();
+    errorCode(
+      () => command(lobby, lobby.hostId, { type: 'assassinate', targetId: lobby.players[1].id }),
+      'CONFLICT',
+    );
+    const assassin = byRole(reveal, 'assassin');
+    const wrongTarget = byRole(reveal, 'loyalist');
+    const missed = command(reveal, assassin.id, {
+      type: 'assassinate',
+      targetId: wrongTarget.id,
+    });
+    expect(missed.phase).toBe('finished');
+    expect(missed.winner).toBe('good');
+  });
 });
 
 describe('secrets, optional modules and rematch', () => {

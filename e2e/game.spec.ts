@@ -486,6 +486,46 @@ test('complete five-player game: concurrent votes, anonymous results, assassinat
   expect(replay.self.role).toBeNull();
 });
 
+test('assassin can strike from the round table immediately after identities are dealt', async ({
+  page,
+  request,
+}) => {
+  const game = await prepare(request);
+  await game.command(0, { type: 'start' });
+  const views = await Promise.all(game.sessions.map((_, index) => game.get(index)));
+  const assassinIndex = views.findIndex((view) => view.self.role === 'assassin');
+  const merlin = views.find((view) => view.self.role === 'merlin')!;
+  expect(views[assassinIndex].room.phase).toBe('reveal');
+  expect(views[assassinIndex].self.canAssassinate).toBe(true);
+  expect(views.filter((view) => view.self.canAssassinate)).toHaveLength(1);
+
+  await enter(page, game.sessions[assassinIndex], game.code);
+  await expect(page.getByRole('heading', { name: '请确认身份' })).toBeVisible();
+  const assassination = page.locator('.assassination-action');
+  await expect(assassination).toContainText('你可以现在刺杀');
+  await page.screenshot({ path: 'test-results/mobile-early-assassination.png', fullPage: true });
+  const merlinPlayer = merlin.room.players.find((player) => player.id === merlin.self.playerId)!;
+  await assassination
+    .getByRole('button', {
+      name: `${merlinPlayer.seat + 1}. ${merlinPlayer.name}`,
+      exact: true,
+    })
+    .click();
+  await assassination
+    .getByRole('button', { name: `确认刺杀 · ${merlinPlayer.name}`, exact: true })
+    .click();
+  await page
+    .getByRole('dialog', { name: '确认刺杀目标？' })
+    .getByRole('button', { name: '确认', exact: true })
+    .click();
+
+  await expect.poll(async () => (await game.get(assassinIndex)).room.phase).toBe('finished');
+  const result = await game.get(assassinIndex);
+  expect(result.room.winner).toBe('evil');
+  expect(result.room.quests).toHaveLength(0);
+  await expect(page.getByRole('heading', { name: '坏人获胜' })).toBeVisible();
+});
+
 test('offline reconnect keeps the same seat and resumes current public state', async ({
   page,
   context,

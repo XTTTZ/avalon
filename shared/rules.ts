@@ -15,7 +15,8 @@ export const ROLE_META: Record<Role, { name: string; alignment: Alignment; descr
     assassin: {
       name: '刺客',
       alignment: 'evil',
-      description: '与其他知情邪恶互认；好人完成获胜任务数后，可刺杀一名玩家，命中梅林则邪恶获胜。',
+      description:
+        '与其他知情邪恶互认；身份发放后可随时刺杀一名其他玩家。命中梅林则邪恶获胜，刺错则好人获胜；刺杀后本局立即结束。',
     },
     morgana: {
       name: '莫甘娜',

@@ -21,7 +21,7 @@ export function AssassinationPanel({
   const playerName = (id: string) =>
     displayName?.(id) ?? room.players.find((player) => player.id === id)?.name ?? '玩家';
 
-  if (room.phase !== 'assassination') return null;
+  if (!self.canAssassinate && room.phase !== 'assassination') return null;
   return (
     <div className="action-panel assassination-action">
       <div className="action-icon">
@@ -31,7 +31,11 @@ export function AssassinationPanel({
         <h3>{self.canAssassinate ? '刺杀梅林' : '等待刺客行动'}</h3>
         {self.canAssassinate && (
           <>
-            <p>选择刺杀目标。</p>
+            <p>
+              {room.phase === 'assassination'
+                ? '选择刺杀目标。'
+                : '你可以现在刺杀。刺中梅林坏人胜，刺错好人胜，本局立即结束。'}
+            </p>
             <div className="target-grid">
               {room.players
                 .filter((player) => player.id !== self.playerId)

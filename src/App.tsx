@@ -1039,6 +1039,15 @@ export default function App() {
                 onSort={beginSorting}
                 displayName={displayName}
               />
+              {self!.canAssassinate && room!.phase !== 'assassination' && (
+                <AssassinationPanel
+                  view={view}
+                  busy={busy}
+                  command={command}
+                  confirm={confirm}
+                  displayName={displayName}
+                />
+              )}
               <div className="card mission-board">
                 <div className="subheading">
                   <h2>
@@ -1467,10 +1476,10 @@ export default function App() {
                 </p>
               </li>
               <li>
-                <strong>最终刺杀与揭晓</strong>
+                <strong>刺杀与揭晓</strong>
                 <p>
-                  标准规则下，任务失败 3 次则坏人胜；成功 3
-                  次后，刺客刺杀梅林，刺中坏人胜，刺错好人胜。
+                  身份发放后，刺客可以随时选择一名其他玩家刺杀。刺中梅林则坏人胜，刺错则好人胜；刺杀后本局立即结束。若好人先完成
+                  3 次任务，进入最终刺杀阶段。
                 </p>
               </li>
             </ol>

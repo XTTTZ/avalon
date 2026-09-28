@@ -332,6 +332,12 @@ export function RulesSummary({ config }: { config: GameConfig }) {
         <span>连续拒绝上限</span>
         <strong>{config.rejectionLimit} 次</strong>
       </div>
+      {config.roles.includes('assassin') && (
+        <div className="stat-pair">
+          <span>刺客行动</span>
+          <strong>开局后随时刺杀</strong>
+        </div>
+      )}
       {(config.lady || config.lancelot !== 'off') && (
         <p className="muted small">
           {[
