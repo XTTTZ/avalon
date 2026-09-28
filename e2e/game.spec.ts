@@ -255,8 +255,8 @@ test('private nickname replaces names across seats, leader controls and every hi
   const team = initial.room.players.slice(0, 2).map((player) => player.id);
   await game.command(1, { type: 'propose', team });
   await page.reload();
-  await expect(page.locator('.action-panel')).toContainText(nickname);
-  await expect(page.locator('.action-panel')).not.toContainText(target.name);
+  await expect(page.locator('.vote-action')).toContainText(nickname);
+  await expect(page.locator('.vote-action')).not.toContainText(target.name);
   for (let index = 0; index < 5; index++)
     await game.command(index, { type: 'teamVote', approve: true });
   for (let index = 0; index < 2; index++)
