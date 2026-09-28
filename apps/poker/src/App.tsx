@@ -77,9 +77,7 @@ function Home({
         <div className="brand-mark">
           <Spade size={30} />
         </div>
-        <p className="eyebrow">线下朋友局</p>
         <h1>Poker 数字筹码</h1>
-        <p>管理筹码、行动顺序、主池和边池。实体牌仍由你们在线下发放。</p>
       </section>
       <section className="card form-card">
         <div className="segmented">
@@ -101,31 +99,17 @@ function Home({
         </label>
         {mode === 'create' ? (
           <>
-            <div className="field-row">
-              <label>
-                玩法
-                <select
-                  value={config.variant}
-                  onChange={(event) =>
-                    setConfig({ ...config, variant: event.target.value as GameConfig['variant'] })
-                  }
-                >
-                  <option value="standard">Standard</option>
-                  <option value="short-deck">Short Deck · SB/BB</option>
-                </select>
-              </label>
-              <label>
-                初始筹码
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  value={config.initialStack}
-                  onChange={(event) =>
-                    setConfig({ ...config, initialStack: Number(event.target.value) })
-                  }
-                />
-              </label>
-            </div>
+            <label>
+              初始筹码
+              <input
+                type="number"
+                inputMode="numeric"
+                value={config.initialStack}
+                onChange={(event) =>
+                  setConfig({ ...config, initialStack: Number(event.target.value) })
+                }
+              />
+            </label>
             <div className="field-row">
               <label>
                 盲注升级
@@ -242,7 +226,7 @@ function Home({
           </>
         )}
       </section>
-      <p className="footnote">剩余筹码与下注公开显示；本工具不发牌，也不判断牌型。</p>
+      <p className="footnote">筹码与下注公开 · 玩家操作自己 · 换街和结算由荷官确认</p>
     </main>
   );
 }
