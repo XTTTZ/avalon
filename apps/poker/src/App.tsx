@@ -18,6 +18,7 @@ import {
   Spade,
   Trash2,
   Users,
+  X,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -247,46 +248,111 @@ function PlayerCard({
   room,
   player,
   style,
+  onSelect,
 }: {
   room: RoomView;
   player: Participant;
   style?: CSSProperties;
+  onSelect: () => void;
 }) {
   const state = room.hand?.players.find((item) => item.participantId === player.id);
   const acting = room.hand?.actorId === player.id;
   const self = room.me.participantId === player.id;
+  const status = state?.folded
+    ? 'FOLD'
+    : state?.allIn
+      ? 'ALL-IN'
+      : acting
+        ? '行动中'
+        : !player.active
+          ? '暂停'
+          : '';
   return (
-    <article
+    <button
+      type="button"
       className={`player-card table-seat ${acting ? 'acting' : ''} ${state?.folded ? 'folded' : ''} ${self ? 'self' : ''}`}
       style={style}
-      aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}`}
+      aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}，本手投入 ${amount(state?.handCommitted ?? 0)}`}
+      aria-haspopup="dialog"
+      onClick={onSelect}
     >
       <div className="player-title">
         <span className="seat-number">{(player.seat ?? 0) + 1}</span>
         <strong title={player.name}>{player.name}</strong>
+      </div>
+      <div className="player-position-slot">
         <PositionBadges room={room} id={player.id} />
       </div>
-      <div className="street-bet">
-        <span>{state ? '本轮下注' : '后手'}</span>
-        <strong>{amount(state?.streetCommitted ?? player.stack)}</strong>
+      <div className="hand-total" aria-label="本手投入">
+        <Coins size={12} />
+        <strong>{amount(state?.handCommitted ?? 0)}</strong>
       </div>
-      <div className="player-money">
-        {state && (
-          <span>
-            本手 <b>{amount(state.handCommitted)}</b>
+      <div className="player-state-slot">
+        {status && (
+          <span
+            className={`status ${acting && !state?.folded && !state?.allIn ? 'turn' : ''} ${state?.folded ? 'fold' : ''} ${state?.allIn ? 'allin' : ''}`}
+          >
+            {status}
           </span>
         )}
-        <span>
-          <Coins size={11} /> 后手 <b>{amount(player.stack)}</b>
-        </span>
       </div>
-      <div className="status-row">
-        {acting && <span className="status turn">行动中</span>}
-        {state?.folded && <span className="status fold">FOLD</span>}
-        {state?.allIn && <span className="status allin">ALL-IN</span>}
-        {!player.active && <span className="status">暂停参与</span>}
-      </div>
-    </article>
+    </button>
+  );
+}
+
+function PlayerDetailPopover({
+  room,
+  player,
+  onClose,
+}: {
+  room: RoomView;
+  player: Participant;
+  onClose: () => void;
+}) {
+  const state = room.hand?.players.find((item) => item.participantId === player.id);
+  const acting = room.hand?.actorId === player.id;
+  const statuses = [
+    acting ? '行动中' : '',
+    state?.folded ? 'Fold' : '',
+    state?.allIn ? 'All-in' : '',
+    !player.active ? '暂停参与' : '',
+  ].filter(Boolean);
+  return (
+    <>
+      <button className="player-popover-backdrop" aria-label="关闭玩家详情" onClick={onClose} />
+      <section
+        className="player-popover"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${player.name} 的筹码详情`}
+      >
+        <header>
+          <div>
+            <span className="seat-number">{(player.seat ?? 0) + 1}</span>
+            <strong>{player.name}</strong>
+            <PositionBadges room={room} id={player.id} />
+          </div>
+          <button aria-label="关闭" onClick={onClose}>
+            <X size={20} />
+          </button>
+        </header>
+        <dl>
+          <div>
+            <dt>后手</dt>
+            <dd>{amount(player.stack)}</dd>
+          </div>
+          <div>
+            <dt>本街下注</dt>
+            <dd>{amount(state?.streetCommitted ?? 0)}</dd>
+          </div>
+          <div>
+            <dt>本手投入</dt>
+            <dd>{amount(state?.handCommitted ?? 0)}</dd>
+          </div>
+        </dl>
+        {statuses.length > 0 && <p>{statuses.join(' · ')}</p>}
+      </section>
+    </>
   );
 }
 
@@ -525,6 +591,7 @@ function TableView({
   busy: boolean;
   command: ReturnType<typeof usePoker>['command'];
 }) {
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const seated = [...room.participants]
     .filter((item) => item.seat !== null)
     .sort((a, b) => a.seat! - b.seat!);
@@ -532,6 +599,8 @@ function TableView({
   const arranged =
     selfIndex > 0 ? [...seated.slice(selfIndex), ...seated.slice(0, selfIndex)] : seated;
   const hand = room.hand;
+  const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
+  const hasSidePots = (hand?.pots.length ?? 0) > 1;
   const total = hand?.players.reduce((sum, item) => sum + item.handCommitted, 0) ?? 0;
   const actorState = hand?.players.find((item) => item.participantId === hand.actorId);
   const callAmount = hand ? Math.max(0, hand.currentBet - (actorState?.streetCommitted ?? 0)) : 0;
@@ -543,7 +612,7 @@ function TableView({
   return (
     <>
       <section
-        className={`poker-table ${arranged.length >= 7 ? 'dense' : ''}`}
+        className={`poker-table ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''}`}
         aria-label="牌桌与玩家座位"
       >
         <div className="table-felt">
@@ -551,42 +620,43 @@ function TableView({
             <p className="eyebrow">{hand ? `第 ${hand.number} 手` : '牌桌准备'}</p>
             <h2>{hand ? streetName[hand.street] : '等待开局'}</h2>
             <div className="center-pot">
-              <span>当前底池</span>
+              <span>底池</span>
               <strong>{amount(total)}</strong>
             </div>
             {hand && (
               <>
                 <div className="center-meta">
                   <span>
-                    盲注 {hand.smallBlind}/{hand.bigBlind}
+                    盲 {hand.smallBlind}/{hand.bigBlind}
                   </span>
                   {hand.phase === 'BETTING' ? (
                     <>
-                      <span>需跟 {amount(callAmount)}</span>
+                      <span>跟 {amount(callAmount)}</span>
                       <span>
-                        {hand.currentBet > 0 ? '最低加到' : '最低下注'} {amount(minimum)}
+                        {hand.currentBet > 0 ? '加至' : '下注'} {amount(minimum)}
                       </span>
                     </>
                   ) : (
                     <span>{hand.phase === 'SETTLED' ? '已结算' : '等待荷官'}</span>
                   )}
                 </div>
-                {hand.pots.length > 0 && (
+                {(hasSidePots || hand.uncalled) && (
                   <div className="center-pots">
-                    {hand.pots.map((pot, index) => (
-                      <div className="center-pot-line" key={pot.id}>
-                        <span>{index === 0 ? '主池' : `边池 ${index}`}</span>
-                        <b>{amount(pot.amount)}</b>
-                        <small>
-                          {pot.eligibleIds
-                            .map((id) => room.participants.find((item) => item.id === id)?.name)
-                            .join(' / ')}
-                        </small>
-                      </div>
-                    ))}
+                    {hasSidePots &&
+                      hand.pots.map((pot, index) => (
+                        <div className="center-pot-line" key={pot.id}>
+                          <span>{index === 0 ? '主池' : `边池 ${index}`}</span>
+                          <b>{amount(pot.amount)}</b>
+                          <small>
+                            {pot.eligibleIds
+                              .map((id) => room.participants.find((item) => item.id === id)?.name)
+                              .join(' / ')}
+                          </small>
+                        </div>
+                      ))}
                     {hand.uncalled && (
                       <div className="center-pot-line pending">
-                        <span>待匹配</span>
+                        <span>待跟</span>
                         <b>{amount(hand.uncalled.amount)}</b>
                       </div>
                     )}
@@ -598,18 +668,28 @@ function TableView({
         </div>
         {arranged.map((player, index) => {
           const angle = Math.PI / 2 + (index * Math.PI * 2) / Math.max(arranged.length, 1);
-          const x = 50 + Math.cos(angle) * (arranged.length >= 7 ? 39 : 35);
-          const y = 50 + Math.sin(angle) * (arranged.length >= 7 ? 37.5 : 39);
+          const xRadius = arranged.length >= 7 ? 42 : arranged.length >= 5 ? 39 : 35;
+          const yRadius = arranged.length >= 7 ? 42 : arranged.length >= 5 ? 41 : 39;
+          const x = 50 + Math.cos(angle) * xRadius;
+          const y = 50 + Math.sin(angle) * yRadius;
           return (
             <PlayerCard
               room={room}
               player={player}
               key={player.id}
               style={{ left: `${x}%`, top: `${y}%` }}
+              onSelect={() => setSelectedPlayerId(player.id)}
             />
           );
         })}
       </section>
+      {selectedPlayer && (
+        <PlayerDetailPopover
+          room={room}
+          player={selectedPlayer}
+          onClose={() => setSelectedPlayerId(null)}
+        />
+      )}
       <DealerPrompt room={room} busy={busy} command={command} />
       <Showdown room={room} busy={busy} command={command} />
       {(!hand || ['SETTLED', 'VOIDED'].includes(hand.phase)) && (
@@ -1147,9 +1227,6 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
                 ? '连接中'
                 : '离线'}
           </span>
-          <button aria-label="同步" onClick={() => void game.sync()}>
-            <RefreshCw size={20} />
-          </button>
           <button aria-label="邀请" onClick={() => setShowInvite(!showInvite)}>
             <Copy size={20} />
           </button>
@@ -1199,6 +1276,10 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
         <button className={tab === 'manage' ? 'active' : ''} onClick={() => setTab('manage')}>
           <Settings size={19} />
           管理
+        </button>
+        <button aria-label="刷新牌局" onClick={() => void game.sync()}>
+          <RefreshCw className={game.busy ? 'spinning' : ''} size={19} />
+          刷新
         </button>
       </nav>
     </main>

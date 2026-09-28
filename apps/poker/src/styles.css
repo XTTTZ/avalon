@@ -293,9 +293,12 @@ select {
 .poker-table {
   position: relative;
   min-height: clamp(470px, 145vw, 640px);
-  overflow: hidden;
+  overflow: visible;
   border-radius: 26px;
   background: radial-gradient(circle at 50% 48%, rgba(32, 91, 66, 0.08), transparent 58%);
+}
+.poker-table.crowded {
+  min-height: clamp(540px, 168vw, 680px);
 }
 .poker-table.dense {
   min-height: clamp(620px, 200vw, 760px);
@@ -392,11 +395,12 @@ select {
 }
 .player-card {
   min-width: 0;
-  padding: 8px;
+  padding: 7px;
   border: 1px solid var(--line);
   border-radius: 13px;
   background: #fff;
   box-shadow: 0 5px 16px rgba(20, 48, 35, 0.12);
+  text-align: left;
   transition:
     border-color 0.2s,
     box-shadow 0.2s;
@@ -404,32 +408,26 @@ select {
 .table-seat {
   position: absolute;
   z-index: 3;
-  width: clamp(104px, 31vw, 148px);
-  min-height: 92px;
+  width: clamp(100px, 29vw, 132px);
+  height: 82px;
   transform: translate(-50%, -50%);
 }
-.poker-table.dense .table-seat {
-  width: clamp(74px, 21vw, 108px);
-  min-height: 70px;
+.poker-table.crowded .table-seat {
+  width: clamp(86px, 25vw, 108px);
+  height: 74px;
   padding: 6px;
+}
+.poker-table.dense .table-seat {
+  width: clamp(76px, 22vw, 94px);
+  height: 70px;
+  padding: 5px;
 }
 .player-card.acting {
   border: 2px solid #2d8a62;
-  padding: 7px;
   box-shadow: 0 0 0 4px rgba(45, 138, 98, 0.12);
 }
-.poker-table.dense .player-card.acting {
-  padding: 5px;
-}
 .poker-table.dense .player-title strong {
-  font-size: 11px;
-}
-.poker-table.dense .street-bet strong {
-  font-size: 19px;
-}
-.poker-table.dense .player-money {
-  gap: 2px 4px;
-  font-size: 8px;
+  font-size: 10px;
 }
 .player-card.self {
   background: #fbfefc;
@@ -441,10 +439,11 @@ select {
 }
 .player-title {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   min-width: 0;
   gap: 4px;
+  padding-right: 19px;
 }
 .player-title strong {
   min-width: 0;
@@ -494,56 +493,37 @@ select {
   color: #4c5c54;
   font-size: 8px;
 }
-.street-bet {
-  margin-top: 6px;
-  display: grid;
-  justify-items: center;
+.player-position-slot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 18px;
+  min-height: 14px;
+}
+.hand-total {
+  height: 27px;
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   color: var(--forest);
 }
-.street-bet span {
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 650;
-}
-.street-bet strong {
+.hand-total strong {
   font:
-    800 22px/1.05 ui-monospace,
+    800 18px/1 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
 }
-.player-money {
-  min-width: 0;
-  margin-top: 5px;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 2px 7px;
-  color: var(--muted);
-  font-size: 9px;
+.poker-table.dense .hand-total strong {
+  font-size: 16px;
 }
-.player-money span {
-  min-width: 0;
-  display: inline-flex;
+.player-state-slot {
+  height: 15px;
+  display: flex;
   align-items: center;
-  gap: 2px;
-  white-space: nowrap;
-}
-.player-money b {
-  overflow: hidden;
-  color: #405248;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-overflow: ellipsis;
-}
-.status-row {
-  min-height: 15px;
-  margin-top: 4px;
-  display: flex;
   justify-content: center;
-  gap: 5px;
-}
-.status-row:empty {
-  display: none;
 }
 .status {
   padding: 2px 5px;
@@ -563,6 +543,88 @@ select {
 .status.allin {
   color: #fff;
   background: #9a4b26;
+}
+.player-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  background: rgba(21, 39, 30, 0.18);
+}
+.player-popover {
+  position: fixed;
+  left: 50%;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 40;
+  width: min(calc(100% - 28px), 390px);
+  transform: translateX(-50%);
+  padding: 14px;
+  border: 1px solid #c8d8ce;
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 16px 46px rgba(15, 39, 27, 0.24);
+  backdrop-filter: blur(16px);
+}
+.player-popover header,
+.player-popover header > div {
+  display: flex;
+  align-items: center;
+}
+.player-popover header {
+  justify-content: space-between;
+  gap: 8px;
+}
+.player-popover header > div {
+  min-width: 0;
+  gap: 7px;
+}
+.player-popover header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-popover header > button {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  background: #eef3ef;
+}
+.player-popover dl {
+  margin: 13px 0 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.player-popover dl div {
+  min-width: 0;
+  padding: 9px 7px;
+  border-radius: 10px;
+  background: #edf3ef;
+}
+.player-popover dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+.player-popover dd {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--forest);
+  font:
+    800 16px/1.1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  text-overflow: ellipsis;
+}
+.player-popover > p {
+  margin-top: 9px;
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 750;
+  text-align: center;
 }
 .dealer-prompt {
   padding: 18px;
@@ -941,7 +1003,7 @@ select {
   width: min(100%, 760px);
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
   border-top: 1px solid rgba(203, 215, 206, 0.95);
   background: rgba(250, 252, 249, 0.96);
@@ -961,6 +1023,14 @@ select {
 .bottom-nav button.active {
   color: var(--forest);
   background: #e7f0ea;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spinning {
+  animation: spin 0.8s linear infinite;
 }
 .toast {
   position: fixed;
@@ -1016,16 +1086,10 @@ select {
     height: 30px;
   }
   .table-seat {
-    width: 98px;
+    width: 94px;
   }
+  .poker-table.crowded .table-seat,
   .poker-table.dense .table-seat {
-    width: 74px;
-  }
-  .street-bet strong {
-    font-size: 19px;
-  }
-  .player-money {
-    gap: 2px 4px;
-    font-size: 8px;
+    width: 72px;
   }
 }
