@@ -611,6 +611,13 @@ select {
   max-height: 54px;
   margin: 3px auto 0;
 }
+.list-pot-card .center-pot-line.pending {
+  width: max-content;
+  max-width: 140px;
+  grid-template-columns: auto auto;
+  justify-self: center;
+  padding-inline: 9px;
+}
 .list-players {
   display: grid;
   gap: 4px;
@@ -620,7 +627,7 @@ select {
   min-width: 0;
   min-height: 48px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto repeat(3, minmax(42px, auto));
+  grid-template-columns: minmax(0, 1fr) 48px 52px 52px 58px;
   align-items: center;
   gap: 5px;
   padding: 5px 7px;
@@ -665,13 +672,21 @@ select {
   flex: 0 0 auto;
 }
 .list-player-state {
+  width: 100%;
+  min-height: 18px;
+  display: grid;
+  place-items: center;
+  justify-self: center;
+  padding: 2px 3px;
+  border-radius: 6px;
   color: #1b6948;
   font-size: 8px;
   font-weight: 850;
+  text-align: center;
   white-space: nowrap;
 }
-.list-player-state:empty {
-  display: none;
+.list-player-state:not(:empty) {
+  background: #cfe9da;
 }
 .list-amount {
   min-width: 0;
@@ -894,6 +909,16 @@ select {
   place-items: center;
   color: var(--muted);
   font-weight: 650;
+}
+.action-bar.your-turn {
+  border-color: #dc8e27;
+  background: rgba(255, 244, 214, 0.98);
+  box-shadow:
+    0 0 0 2px rgba(220, 142, 39, 0.12),
+    0 -8px 30px rgba(121, 68, 12, 0.2);
+}
+.action-bar.your-turn .action-summary strong {
+  color: #8b3e0d;
 }
 .action-summary {
   display: flex;
@@ -1186,6 +1211,12 @@ select {
   color: var(--forest);
   background: #e7f0ea;
 }
+.bottom-nav .refresh-button {
+  transition: opacity 0.18s ease;
+}
+.bottom-nav .refresh-button.refreshing {
+  opacity: 0.42;
+}
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -1266,7 +1297,7 @@ select {
     width: 72px;
   }
   .list-player-row {
-    grid-template-columns: minmax(0, 1fr) auto repeat(3, minmax(38px, auto));
+    grid-template-columns: minmax(0, 1fr) 42px 43px 43px 50px;
     gap: 3px;
     padding-left: 5px;
     padding-right: 5px;

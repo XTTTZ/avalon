@@ -384,7 +384,7 @@ function ActionBar({
       send('all-in');
   };
   return (
-    <div className="action-bar">
+    <div className="action-bar your-turn">
       <div className="action-summary">
         <strong>轮到你</strong>
         <span>需跟 {amount(legal.callNeeded)}</span>
@@ -1307,11 +1307,24 @@ function ManageView({
 
 function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomView }) {
   const [tab, setTab] = useState<'table' | 'history' | 'summary' | 'manage'>('table');
+  const [refreshing, setRefreshing] = useState(false);
   const invite = useMemo(
     () => `${location.origin}${import.meta.env.BASE_URL}?room=${room.code}`,
     [room.code],
   );
   const [showInvite, setShowInvite] = useState(false);
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        game.sync(),
+        new Promise<void>((resolve) => window.setTimeout(resolve, 450)),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
   return (
     <main className="shell room-shell">
       <header className="room-header">
@@ -1379,8 +1392,14 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
           <Settings size={19} />
           管理
         </button>
-        <button aria-label="刷新牌局" onClick={() => void game.sync()}>
-          <RefreshCw className={game.busy ? 'spinning' : ''} size={19} />
+        <button
+          className={`refresh-button ${refreshing ? 'refreshing' : ''}`}
+          aria-label="刷新牌局"
+          aria-busy={refreshing}
+          disabled={refreshing}
+          onClick={() => void refresh()}
+        >
+          <RefreshCw className={refreshing ? 'spinning' : ''} size={19} />
           刷新
         </button>
       </nav>
