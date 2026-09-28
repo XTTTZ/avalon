@@ -154,6 +154,7 @@ export interface UndoSnapshot {
   lastButtonId: string | null;
   completedHands: number;
   blindLevel: number;
+  nextBlinds?: BlindLevel | null;
   ledgerLength: number;
 }
 
@@ -170,6 +171,7 @@ export interface RoomState {
   paused: boolean;
   config: GameConfig;
   blindLevel: number;
+  nextBlinds?: BlindLevel | null;
   completedHands: number;
   lastButtonId: string | null;
   members: RoomMember[];
@@ -221,6 +223,7 @@ export type PokerCommand =
   | { type: 'reorder'; participantIds: string[] }
   | { type: 'set-participant-active'; participantId: string; active: boolean }
   | { type: 'set-blind-level'; level: number }
+  | { type: 'set-next-blinds'; smallBlind: number; bigBlind: number }
   | { type: 'refill'; participantId: string; amount: number }
   | { type: 'adjust-chips'; participantId: string; amount: number; reason: string }
   | { type: 'configure'; config: GameConfig };

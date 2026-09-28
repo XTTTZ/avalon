@@ -126,6 +126,15 @@ function validateCommand(value: unknown): asserts value is PokerCommand {
       if (!Number.isSafeInteger(command.level) || Number(command.level) < 0)
         throw new PokerError('INVALID', '盲注级别无效');
       break;
+    case 'set-next-blinds':
+      if (
+        !Number.isSafeInteger(command.smallBlind) ||
+        Number(command.smallBlind) <= 0 ||
+        !Number.isSafeInteger(command.bigBlind) ||
+        Number(command.bigBlind) <= 0
+      )
+        throw new PokerError('INVALID', '盲注金额无效');
+      break;
     case 'refill':
       validateEntityId(command.participantId, '玩家');
       if (!Number.isSafeInteger(command.amount) || Number(command.amount) <= 0)

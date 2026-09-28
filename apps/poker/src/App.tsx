@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
@@ -243,30 +243,45 @@ function PositionBadges({ room, id }: { room: RoomView; id: string }) {
   );
 }
 
-function PlayerCard({ room, player }: { room: RoomView; player: Participant }) {
+function PlayerCard({
+  room,
+  player,
+  style,
+}: {
+  room: RoomView;
+  player: Participant;
+  style?: CSSProperties;
+}) {
   const state = room.hand?.players.find((item) => item.participantId === player.id);
   const acting = room.hand?.actorId === player.id;
+  const self = room.me.participantId === player.id;
   return (
-    <article className={`player-card ${acting ? 'acting' : ''} ${state?.folded ? 'folded' : ''}`}>
+    <article
+      className={`player-card table-seat ${acting ? 'acting' : ''} ${state?.folded ? 'folded' : ''} ${self ? 'self' : ''}`}
+      style={style}
+      aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}`}
+    >
       <div className="player-title">
-        <span className="avatar">{player.name.slice(0, 1)}</span>
-        <div>
-          <strong>{player.name}</strong>
-          <PositionBadges room={room} id={player.id} />
-        </div>
-        {acting && <span className="turn-pill">行动中</span>}
+        <span className="seat-number">{(player.seat ?? 0) + 1}</span>
+        <strong title={player.name}>{player.name}</strong>
+        <PositionBadges room={room} id={player.id} />
       </div>
-      <div className="stack">
-        <Coins size={17} />
-        <strong>{amount(player.stack)}</strong>
+      <div className="street-bet">
+        <span>{state ? '本轮下注' : '后手'}</span>
+        <strong>{amount(state?.streetCommitted ?? player.stack)}</strong>
       </div>
-      {state && (
-        <div className="commitments">
-          <span>本轮 {amount(state.streetCommitted)}</span>
-          <span>本手 {amount(state.handCommitted)}</span>
-        </div>
-      )}
+      <div className="player-money">
+        {state && (
+          <span>
+            本手 <b>{amount(state.handCommitted)}</b>
+          </span>
+        )}
+        <span>
+          <Coins size={11} /> 后手 <b>{amount(player.stack)}</b>
+        </span>
+      </div>
       <div className="status-row">
+        {acting && <span className="status turn">行动中</span>}
         {state?.folded && <span className="status fold">FOLD</span>}
         {state?.allIn && <span className="status allin">ALL-IN</span>}
         {!player.active && <span className="status">暂停参与</span>}
@@ -391,11 +406,16 @@ function DealerPrompt({
           ? 'River'
           : 'Showdown';
   const live = hand.players.filter((item) => !item.folded).length;
+  const ableToBet = hand.players.filter((item) => {
+    const player = room.participants.find((candidate) => candidate.id === item.participantId);
+    return !item.folded && !item.allIn && (player?.stack ?? 0) > 0;
+  }).length;
+  const runout = hand.street !== 'RIVER' && ableToBet <= 1;
   return (
     <section className="dealer-prompt">
       <p className="eyebrow">荷官提示</p>
-      <h2>下注已齐平</h2>
-      <p>请在线下发 {next}</p>
+      <h2>{runout ? '所有下注已完成' : '下注已齐平'}</h2>
+      <p>{runout ? '请发完剩余公共牌' : `请在线下发 ${next}`}</p>
       <div className="prompt-stats">
         <span>
           当前总额 <b>{amount(hand.players.reduce((sum, item) => sum + item.handCommitted, 0))}</b>
@@ -410,7 +430,7 @@ function DealerPrompt({
           disabled={busy}
           onClick={() => void command({ type: 'confirm-street' })}
         >
-          <Check size={19} /> 确认已发 {next}
+          <Check size={19} /> {runout ? '已发完 · 进入 Showdown' : `确认已发 ${next}`}
         </button>
       ) : (
         <p className="muted">等待荷官确认</p>
@@ -508,82 +528,88 @@ function TableView({
   const seated = [...room.participants]
     .filter((item) => item.seat !== null)
     .sort((a, b) => a.seat! - b.seat!);
+  const selfIndex = seated.findIndex((item) => item.id === room.me.participantId);
+  const arranged =
+    selfIndex > 0 ? [...seated.slice(selfIndex), ...seated.slice(0, selfIndex)] : seated;
   const hand = room.hand;
   const total = hand?.players.reduce((sum, item) => sum + item.handCommitted, 0) ?? 0;
+  const actorState = hand?.players.find((item) => item.participantId === hand.actorId);
+  const callAmount = hand ? Math.max(0, hand.currentBet - (actorState?.streetCommitted ?? 0)) : 0;
+  const minimum = hand
+    ? hand.currentBet > 0
+      ? hand.currentBet + hand.lastFullRaiseSize
+      : hand.bigBlind
+    : 0;
   return (
     <>
-      <section className="table-summary card">
-        <div>
-          <p className="eyebrow">{hand ? `第 ${hand.number} 手` : '牌桌准备'}</p>
-          <h2>{hand ? streetName[hand.street] : '等待开局'}</h2>
-        </div>
-        <div className="pot-total">
-          <span>当前总额</span>
-          <strong>{amount(total)}</strong>
-        </div>
-        {hand && (
-          <div className="table-meta">
-            <span>
-              盲注 {hand.smallBlind}/{hand.bigBlind}
-            </span>
-            {hand.phase === 'BETTING' ? (
+      <section
+        className={`poker-table ${arranged.length >= 7 ? 'dense' : ''}`}
+        aria-label="牌桌与玩家座位"
+      >
+        <div className="table-felt">
+          <div className="table-center">
+            <p className="eyebrow">{hand ? `第 ${hand.number} 手` : '牌桌准备'}</p>
+            <h2>{hand ? streetName[hand.street] : '等待开局'}</h2>
+            <div className="center-pot">
+              <span>当前底池</span>
+              <strong>{amount(total)}</strong>
+            </div>
+            {hand && (
               <>
-                <span>
-                  需跟{' '}
-                  {amount(
-                    Math.max(
-                      0,
-                      hand.currentBet -
-                        (hand.actorId
-                          ? (hand.players.find((item) => item.participantId === hand.actorId)
-                              ?.streetCommitted ?? 0)
-                          : 0),
-                    ),
+                <div className="center-meta">
+                  <span>
+                    盲注 {hand.smallBlind}/{hand.bigBlind}
+                  </span>
+                  {hand.phase === 'BETTING' ? (
+                    <>
+                      <span>需跟 {amount(callAmount)}</span>
+                      <span>
+                        {hand.currentBet > 0 ? '最低加到' : '最低下注'} {amount(minimum)}
+                      </span>
+                    </>
+                  ) : (
+                    <span>{hand.phase === 'SETTLED' ? '已结算' : '等待荷官'}</span>
                   )}
-                </span>
-                <span>
-                  {hand.currentBet > 0 ? '最低加到' : '最低下注'}{' '}
-                  {amount(
-                    hand.currentBet > 0 ? hand.currentBet + hand.lastFullRaiseSize : hand.bigBlind,
-                  )}
-                </span>
+                </div>
+                {hand.pots.length > 0 && (
+                  <div className="center-pots">
+                    {hand.pots.map((pot, index) => (
+                      <div className="center-pot-line" key={pot.id}>
+                        <span>{index === 0 ? '主池' : `边池 ${index}`}</span>
+                        <b>{amount(pot.amount)}</b>
+                        <small>
+                          {pot.eligibleIds
+                            .map((id) => room.participants.find((item) => item.id === id)?.name)
+                            .join(' / ')}
+                        </small>
+                      </div>
+                    ))}
+                    {hand.uncalled && (
+                      <div className="center-pot-line pending">
+                        <span>待匹配</span>
+                        <b>{amount(hand.uncalled.amount)}</b>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
-            ) : (
-              <span>{hand.phase === 'SETTLED' ? '已结算' : '等待荷官'}</span>
             )}
           </div>
-        )}
+        </div>
+        {arranged.map((player, index) => {
+          const angle = Math.PI / 2 + (index * Math.PI * 2) / Math.max(arranged.length, 1);
+          const x = 50 + Math.cos(angle) * (arranged.length >= 7 ? 39 : 35);
+          const y = 50 + Math.sin(angle) * (arranged.length >= 7 ? 37.5 : 39);
+          return (
+            <PlayerCard
+              room={room}
+              player={player}
+              key={player.id}
+              style={{ left: `${x}%`, top: `${y}%` }}
+            />
+          );
+        })}
       </section>
-      <section className="players-grid">
-        {seated.map((player) => (
-          <PlayerCard room={room} player={player} key={player.id} />
-        ))}
-      </section>
-      {hand && hand.pots.length > 0 && (
-        <section className="pots card">
-          <h3>底池</h3>
-          {hand.pots.map((pot, index) => (
-            <div className="pot-line" key={pot.id}>
-              <span>{index === 0 ? '主池' : `边池 ${index}`}</span>
-              <strong>{amount(pot.amount)}</strong>
-              <small>
-                {pot.eligibleIds
-                  .map((id) => room.participants.find((item) => item.id === id)?.name)
-                  .join(' / ')}
-              </small>
-            </div>
-          ))}
-          {hand.uncalled && (
-            <div className="pot-line pending">
-              <span>待匹配</span>
-              <strong>{amount(hand.uncalled.amount)}</strong>
-              <small>
-                {room.participants.find((item) => item.id === hand.uncalled?.participantId)?.name}
-              </small>
-            </div>
-          )}
-        </section>
-      )}
       <DealerPrompt room={room} busy={busy} command={command} />
       <Showdown room={room} busy={busy} command={command} />
       {(!hand || ['SETTLED', 'VOIDED'].includes(hand.phase)) && (
@@ -612,6 +638,7 @@ function StartPanel({
   const selectedButton = seated.some((item) => item.id === buttonId)
     ? buttonId
     : (seated[0]?.id ?? '');
+  const nextBlinds = room.nextBlinds ?? room.config.blindLevels[room.blindLevel];
   if (!room.me.isDealer)
     return (
       <section className="card empty">
@@ -621,6 +648,12 @@ function StartPanel({
   return (
     <section className="card start-panel">
       <h2>{room.hand ? '本手已结束' : '准备第一手'}</h2>
+      <p className="next-blinds">
+        下一手盲注{' '}
+        <strong>
+          {nextBlinds.smallBlind}/{nextBlinds.bigBlind}
+        </strong>
+      </p>
       {!room.lastButtonId && (
         <label>
           首手 Button
@@ -744,6 +777,20 @@ function ManageView({
   const [correctionAmount, setCorrectionAmount] = useState(room.config.chipUnit);
   const [voidReason, setVoidReason] = useState('线下发牌或操作有误');
   const [ownerTarget, setOwnerTarget] = useState('');
+  const plannedBlinds = room.nextBlinds ?? room.config.blindLevels[room.blindLevel];
+  const [nextSmallBlind, setNextSmallBlind] = useState(plannedBlinds.smallBlind);
+  const [nextBigBlind, setNextBigBlind] = useState(plannedBlinds.bigBlind);
+  useEffect(() => {
+    setNextSmallBlind(plannedBlinds.smallBlind);
+    setNextBigBlind(plannedBlinds.bigBlind);
+  }, [plannedBlinds.smallBlind, plannedBlinds.bigBlind]);
+  const nextBlindsValid =
+    Number.isSafeInteger(nextSmallBlind) &&
+    Number.isSafeInteger(nextBigBlind) &&
+    nextSmallBlind > 0 &&
+    nextSmallBlind <= nextBigBlind &&
+    nextSmallBlind % room.config.chipUnit === 0 &&
+    nextBigBlind % room.config.chipUnit === 0;
   const betweenHands = !room.hand || ['SETTLED', 'VOIDED'].includes(room.hand.phase);
   const activeMemberIds = new Set(room.members.map((item) => item.id));
   const currentPlayers = room.participants.filter((item) => activeMemberIds.has(item.memberId));
@@ -784,35 +831,44 @@ function ManageView({
                   ))}
               </select>
             </label>
-            <div className="field-row">
+            <div className="blind-editor">
               <label>
-                下一手盲注
-                <select
-                  value={room.blindLevel}
-                  disabled={busy || !betweenHands || room.config.blindUpgrade === 'hands'}
-                  onChange={(event) =>
-                    void command({ type: 'set-blind-level', level: Number(event.target.value) })
-                  }
-                >
-                  {room.config.blindLevels.map((level, index) => (
-                    <option key={`${level.smallBlind}-${level.bigBlind}-${index}`} value={index}>
-                      {index + 1}. {level.smallBlind}/{level.bigBlind}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                升级方式
+                下一手 SB
                 <input
-                  value={
-                    room.config.blindUpgrade === 'hands'
-                      ? `每 ${room.config.handsPerLevel} 手自动`
-                      : '手动'
-                  }
-                  readOnly
+                  type="number"
+                  inputMode="numeric"
+                  min={room.config.chipUnit}
+                  step={room.config.chipUnit}
+                  value={nextSmallBlind}
+                  onChange={(event) => setNextSmallBlind(Number(event.target.value))}
                 />
               </label>
+              <label>
+                下一手 BB
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={room.config.chipUnit}
+                  step={room.config.chipUnit}
+                  value={nextBigBlind}
+                  onChange={(event) => setNextBigBlind(Number(event.target.value))}
+                />
+              </label>
+              <button
+                className="secondary"
+                disabled={busy || !nextBlindsValid}
+                onClick={() =>
+                  void command({
+                    type: 'set-next-blinds',
+                    smallBlind: nextSmallBlind,
+                    bigBlind: nextBigBlind,
+                  })
+                }
+              >
+                保存下一手盲注
+              </button>
             </div>
+            <p className="muted">可在当前手进行中修改；只覆盖下一手，之后继续原有盲注计划。</p>
           </>
         )}
         <div className="tool-row">
@@ -874,10 +930,15 @@ function ManageView({
           const playerMember = room.members.find((item) => item.id === player.memberId)!;
           return (
             <div className="manage-player" key={player.id}>
-              <div>
+              <div className="manage-player-info">
                 <span className="avatar small">{player.name.slice(0, 1)}</span>
-                <strong>{player.name}</strong>
-                <small>{amount(player.stack)} 筹码</small>
+                <span className="manage-player-copy">
+                  <strong title={player.name}>{player.name}</strong>
+                  <small>
+                    {isSeated ? `${(player.seat ?? 0) + 1}号位` : '未入座'} · {amount(player.stack)}{' '}
+                    筹码
+                  </small>
+                </span>
               </div>
               {room.me.isOwner && (
                 <div className="seat-tools">

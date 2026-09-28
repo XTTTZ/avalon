@@ -149,7 +149,7 @@ describe('Poker betting engine', () => {
     expect(room.hand!.phase).toBe('AWAITING_STREET_CONFIRMATION');
   });
 
-  it('advances all-in runout one dealer confirmation at a time', () => {
+  it('advances an all-in runout with one dealer confirmation', () => {
     let room = flopState(roomWithPlayers(2, 100));
     for (const participant of room.participants) forceStack(room, participant.id, 0);
     for (const player of room.hand!.players) player.allIn = true;
@@ -157,10 +157,8 @@ describe('Poker betting engine', () => {
     room.hand!.actorId = null;
     room.hand!.needsAction = [];
     room = applyCommand(room, 'user-1', { type: 'confirm-street' }, 2000);
-    expect(room.hand!.street).toBe('TURN');
-    expect(room.hand!.phase).toBe('AWAITING_STREET_CONFIRMATION');
-    room = applyCommand(room, 'user-1', { type: 'confirm-street' }, 2100);
-    expect(room.hand!.street).toBe('RIVER');
+    expect(room.hand!.street).toBe('SHOWDOWN');
+    expect(room.hand!.phase).toBe('SHOWDOWN');
   });
 });
 

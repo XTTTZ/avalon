@@ -143,6 +143,7 @@ function snapshot(room: RoomState, eventId = ''): UndoSnapshot {
     lastButtonId: room.lastButtonId,
     completedHands: room.completedHands,
     blindLevel: room.blindLevel,
+    nextBlinds: copy(room.nextBlinds ?? null),
     ledgerLength: room.ledger.length,
   };
 }
@@ -210,6 +211,7 @@ export function createRoom(
     paused: false,
     config: validateConfig(config),
     blindLevel: 0,
+    nextBlinds: null,
     completedHands: 0,
     lastButtonId: null,
     members: [{ id: memberId, userId, name: cleanName, joinedAt: now, participantId }],
@@ -642,13 +644,14 @@ function startHand(
   const seats = activeSeats(room).filter((item) => item.stack > 0);
   invalid(seats.length >= 2, '至少需要两位有筹码的玩家');
   invalid(seats.length <= 10, '最多 10 位玩家');
-  if (room.config.blindUpgrade === 'hands') {
+  if (room.config.blindUpgrade === 'hands' && !room.nextBlinds) {
     room.blindLevel = Math.min(
       room.config.blindLevels.length - 1,
       Math.floor(room.completedHands / room.config.handsPerLevel),
     );
   }
-  const level = room.config.blindLevels[room.blindLevel];
+  const level = copy(room.nextBlinds ?? room.config.blindLevels[room.blindLevel]);
+  room.nextBlinds = null;
   const ids = seats.map((item) => item.id);
   let button = buttonId;
   if (!room.lastButtonId) {
@@ -809,18 +812,24 @@ function confirmStreet(room: RoomState, actorMemberId: string, now: number) {
   const hand = room.hand;
   invalid(hand?.phase === 'AWAITING_STREET_CONFIRMATION' && !room.paused, '当前无需确认下一阶段');
   const before = hand.street;
+  const live = hand.players.filter((item) => !item.folded);
+  const canKeepBetting = live.filter((item) => canAct(room, item)).length > 1;
   const next: Record<Exclude<Street, 'SHOWDOWN'>, Street> = {
     PREFLOP: 'FLOP',
     FLOP: 'TURN',
     TURN: 'RIVER',
     RIVER: 'SHOWDOWN',
   };
-  hand.street = next[before as Exclude<Street, 'SHOWDOWN'>];
+  hand.street = canKeepBetting ? next[before as Exclude<Street, 'SHOWDOWN'>] : 'SHOWDOWN';
   const confirmed = event(
     room,
     actorMemberId,
     'STREET_CONFIRMED',
-    hand.street === 'SHOWDOWN' ? '荷官确认进入 Showdown' : `荷官确认进入 ${hand.street}`,
+    hand.street === 'SHOWDOWN' && before !== 'RIVER'
+      ? '荷官确认发完公共牌，进入 Showdown'
+      : hand.street === 'SHOWDOWN'
+        ? '荷官确认进入 Showdown'
+        : `荷官确认进入 ${hand.street}`,
     { street: hand.street },
     now,
   );
@@ -1014,6 +1023,7 @@ export function applyCommand(
       room.lastButtonId = frame.lastButtonId;
       room.completedHands = frame.completedHands;
       room.blindLevel = frame.blindLevel;
+      room.nextBlinds = 'nextBlinds' in frame ? copy(frame.nextBlinds ?? null) : null;
       room.ledger = room.ledger.slice(0, frame.ledgerLength);
       const undone = event(
         room,
@@ -1201,6 +1211,7 @@ export function applyCommand(
       );
       before = snapshot(room);
       room.blindLevel = command.level;
+      room.nextBlinds = null;
       primary = event(
         room,
         actor.id,
@@ -1210,6 +1221,30 @@ export function applyCommand(
         now,
       );
       break;
+    case 'set-next-blinds': {
+      assertOwner(room, actor.id);
+      invalid(
+        integer(command.smallBlind) &&
+          integer(command.bigBlind) &&
+          command.smallBlind > 0 &&
+          command.smallBlind <= command.bigBlind &&
+          command.bigBlind <= MAX_STACK &&
+          command.smallBlind % room.config.chipUnit === 0 &&
+          command.bigBlind % room.config.chipUnit === 0,
+        '盲注必须为有效筹码整数，且小盲不能高于大盲',
+      );
+      before = snapshot(room);
+      room.nextBlinds = { smallBlind: command.smallBlind, bigBlind: command.bigBlind };
+      primary = event(
+        room,
+        actor.id,
+        'BLIND_LEVEL_CHANGED',
+        `下一手盲注设为 ${command.smallBlind}/${command.bigBlind}`,
+        {},
+        now,
+      );
+      break;
+    }
     case 'refill': {
       assertAdmin(room, actor.id);
       invalid(betweenHands(room), '补码将在本手结束后处理');
