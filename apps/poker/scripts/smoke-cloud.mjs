@@ -8,6 +8,7 @@ async function verify() {
   const preflight = await fetch(endpoint, {
     method: 'OPTIONS',
     headers: { Origin: origin, 'Access-Control-Request-Method': 'POST' },
+    signal: AbortSignal.timeout(15_000),
   });
   if (preflight.status !== 204 || preflight.headers.get('access-control-allow-origin') !== origin)
     throw new Error(`Poker preflight failed with ${preflight.status}`);
@@ -19,6 +20,7 @@ async function verify() {
       action: 'auth.guest',
       deviceSecret: randomBytes(32).toString('hex'),
     }),
+    signal: AbortSignal.timeout(15_000),
   });
   const payload = await response.json();
   if (!response.ok || payload?.ok !== true || !payload?.data?.token)
