@@ -587,13 +587,15 @@ function PublicActions({
     );
   if (room.phase === 'assassination')
     return (
-      <AssassinationPanel
-        view={view}
-        busy={busy}
-        command={command}
-        confirm={confirm}
-        displayName={displayName}
-      />
+      <div className="action-panel">
+        <div className="action-icon">
+          <Swords size={24} />
+        </div>
+        <div className="action-copy">
+          <h3>最终刺杀</h3>
+          <p>等待刺客在身份页完成刺杀。</p>
+        </div>
+      </div>
     );
 
   return (
@@ -737,9 +739,9 @@ export default function App() {
   const game = useGame();
   const [tab, setTab] = useState<Tab>('table');
   const [selection, setSelection] = useState<string[]>([]);
-  const [dialog, setDialog] = useState<'share' | 'rules' | 'help' | 'manage' | 'players' | null>(
-    null,
-  );
+  const [dialog, setDialog] = useState<
+    'share' | 'rules' | 'help' | 'manage' | 'players' | 'assassinate' | null
+  >(null);
   const [confirmState, setConfirmState] = useState<Confirmation | null>(null);
   const [managing, setManaging] = useState<PublicPlayer | null>(null);
   const [sortOrder, setSortOrder] = useState<string[] | null>(null);
@@ -768,6 +770,9 @@ export default function App() {
     );
   const self = view?.self;
   const isHost = room?.hostId === self?.playerId;
+  useEffect(() => {
+    if (dialog === 'assassinate' && !self?.canAssassinate) setDialog(null);
+  }, [dialog, self?.canAssassinate]);
   const canChangeOrder = room && room.phase !== 'finished' && room.phase !== 'assassination';
   const sortingBase = useRef('');
   const playersKey = room?.players.map((player) => player.id).join(',') ?? '';
@@ -1039,15 +1044,6 @@ export default function App() {
                 onSort={beginSorting}
                 displayName={displayName}
               />
-              {self!.canAssassinate && room!.phase !== 'assassination' && (
-                <AssassinationPanel
-                  view={view}
-                  busy={busy}
-                  command={command}
-                  confirm={confirm}
-                  displayName={displayName}
-                />
-              )}
               <div className="card mission-board">
                 <div className="subheading">
                   <h2>
@@ -1260,7 +1256,13 @@ export default function App() {
               </div>
             </div>
             {tab === 'identity' && (
-              <SecretPanel view={view} busy={busy} command={command} displayName={displayName} />
+              <SecretPanel
+                view={view}
+                busy={busy}
+                command={command}
+                displayName={displayName}
+                onAssassinate={() => setDialog('assassinate')}
+              />
             )}
             <div hidden={tab !== 'notes'}>
               <NotesPanel
@@ -1343,6 +1345,17 @@ export default function App() {
               if (await game.command({ type: 'configure', config })) setDialog(null);
               else throw new Error('规则未保存，请检查上方提示后重试。');
             }}
+          />
+        </Modal>
+      )}
+      {dialog === 'assassinate' && view && self?.canAssassinate && (
+        <Modal title="刺杀梅林" onClose={() => !busy && setDialog(null)}>
+          <AssassinationPanel
+            view={view}
+            busy={busy}
+            command={command}
+            confirm={confirm}
+            displayName={displayName}
           />
         </Modal>
       )}
@@ -1478,8 +1491,8 @@ export default function App() {
               <li>
                 <strong>刺杀与揭晓</strong>
                 <p>
-                  身份发放后，刺客可以随时选择一名其他玩家刺杀。刺中梅林则坏人胜，刺错则好人胜；刺杀后本局立即结束。若好人先完成
-                  3 次任务，进入最终刺杀阶段。
+                  身份发放后，刺客可以随时进入“我的身份”，显示身份后选择刺杀。刺中梅林则坏人胜，刺错则好人胜；刺杀后本局立即结束。若好人先完成
+                  3 次任务，圆桌进入最终刺杀等待阶段。
                 </p>
               </li>
             </ol>

@@ -446,15 +446,19 @@ test('complete five-player game: concurrent votes, anonymous results, assassinat
   const assassin = views.findIndex((view) => view.self.canAssassinate);
   const merlin = views.find((view) => view.self.role === 'merlin')!;
   await enter(page, game.sessions[assassin], game.code);
+  await expect(page.getByText('等待刺客在身份页完成刺杀。', { exact: true })).toBeVisible();
+  await expect(page.locator('.assassination-action')).toHaveCount(0);
   await page
     .getByRole('button', { name: /我的身份/ })
     .last()
     .click();
   await page.getByRole('button', { name: /临时显示 5 秒/ }).click();
   await expect(page.locator('.secret-content')).toBeVisible();
-  await expect(page.locator('.secret-content')).toHaveCount(0, { timeout: 7000 });
-  await page.getByRole('button', { name: '公共圆桌', exact: true }).click();
-  const assassination = page.locator('.assassination-action');
+  await page.locator('.secret-content').getByRole('button', { name: '刺杀梅林' }).click();
+  await expect(page.locator('.secret-content')).toHaveCount(0);
+  const assassination = page
+    .getByRole('dialog', { name: '刺杀梅林' })
+    .locator('.assassination-action');
   const merlinPlayer = merlin.room.players.find((player) => player.id === merlin.self.playerId)!;
   const choose = assassination.getByRole('button', {
     name: `${merlinPlayer.seat + 1}. ${merlinPlayer.name}`,
@@ -486,7 +490,7 @@ test('complete five-player game: concurrent votes, anonymous results, assassinat
   expect(replay.self.role).toBeNull();
 });
 
-test('assassin can strike from the round table immediately after identities are dealt', async ({
+test('assassin can only open an early strike after revealing the private identity', async ({
   page,
   request,
 }) => {
@@ -501,8 +505,19 @@ test('assassin can strike from the round table immediately after identities are 
 
   await enter(page, game.sessions[assassinIndex], game.code);
   await expect(page.getByRole('heading', { name: '请确认身份' })).toBeVisible();
-  const assassination = page.locator('.assassination-action');
-  await expect(assassination).toContainText('你可以现在刺杀');
+  await expect(page.locator('.assassination-action')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '刺杀梅林' })).toHaveCount(0);
+  await page.getByRole('button', { name: '我的身份', exact: true }).click();
+  await expect(page.getByRole('button', { name: '刺杀梅林' })).toHaveCount(0);
+  await page.getByRole('button', { name: /临时显示 5 秒/ }).click();
+  const identity = page.locator('.secret-content');
+  await expect(identity.getByRole('button', { name: '刺杀梅林' })).toBeVisible();
+  await identity.getByRole('button', { name: '刺杀梅林' }).click();
+  await expect(identity).toHaveCount(0);
+  const assassination = page
+    .getByRole('dialog', { name: '刺杀梅林' })
+    .locator('.assassination-action');
+  await expect(assassination).toContainText('刺中梅林坏人胜');
   await page.screenshot({ path: 'test-results/mobile-early-assassination.png', fullPage: true });
   const merlinPlayer = merlin.room.players.find((player) => player.id === merlin.self.playerId)!;
   await assassination
@@ -523,6 +538,8 @@ test('assassin can strike from the round table immediately after identities are 
   const result = await game.get(assassinIndex);
   expect(result.room.winner).toBe('evil');
   expect(result.room.quests).toHaveLength(0);
+  await expect(page.getByRole('heading', { name: '本局结束' })).toBeVisible();
+  await page.getByRole('button', { name: '公共圆桌', exact: true }).click();
   await expect(page.getByRole('heading', { name: '坏人获胜' })).toBeVisible();
 });
 

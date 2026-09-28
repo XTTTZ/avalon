@@ -335,7 +335,7 @@ export function RulesSummary({ config }: { config: GameConfig }) {
       {config.roles.includes('assassin') && (
         <div className="stat-pair">
           <span>刺客行动</span>
-          <strong>开局后随时刺杀</strong>
+          <strong>身份页随时刺杀</strong>
         </div>
       )}
       {(config.lady || config.lancelot !== 'off') && (

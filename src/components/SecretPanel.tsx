@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Eye, Fingerprint, LockKeyhole, ShieldCheck } from 'lucide-react';
+import { Eye, Fingerprint, LockKeyhole, ShieldCheck, Swords } from 'lucide-react';
 import type { GameCommand, RoomView } from '../../shared/types';
 import { ROLE_META } from '../../shared/rules';
 import './SecretPanel.css';
@@ -9,11 +9,13 @@ export function SecretPanel({
   busy,
   command,
   displayName,
+  onAssassinate,
 }: {
   view: RoomView;
   busy: boolean;
   command: (command: GameCommand) => Promise<void>;
   displayName?: (id: string) => string;
+  onAssassinate: () => void;
 }) {
   const { room, self } = view;
   const [revealed, setRevealed] = useState(false);
@@ -95,6 +97,19 @@ export function SecretPanel({
               <span className={`alignment-label ${self.alignment}`}>
                 {self.alignment === 'good' ? '当前阵营 · 好人' : '当前阵营 · 坏人'}
               </span>
+              {self.canAssassinate && (
+                <button
+                  className="button danger full secret-assassinate-button"
+                  disabled={busy}
+                  onClick={() => {
+                    hide();
+                    onAssassinate();
+                  }}
+                >
+                  <Swords size={17} />
+                  刺杀梅林
+                </button>
+              )}
               <p className="role-description">{self.roleText}</p>
               {self.knownPlayers.length > 0 && (
                 <div className="known-players">
