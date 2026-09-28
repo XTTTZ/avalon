@@ -272,7 +272,7 @@ function PlayerCard({
       type="button"
       className={`player-card table-seat ${acting ? 'acting' : ''} ${state?.folded ? 'folded' : ''} ${self ? 'self' : ''}`}
       style={style}
-      aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}，本手投入 ${amount(state?.handCommitted ?? 0)}`}
+      aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}，本街下注 ${amount(state?.streetCommitted ?? 0)}`}
       aria-haspopup="dialog"
       onClick={onSelect}
     >
@@ -283,9 +283,9 @@ function PlayerCard({
       <div className="player-position-slot">
         <PositionBadges room={room} id={player.id} />
       </div>
-      <div className="hand-total" aria-label="本手投入">
+      <div className="street-total" aria-label="本街下注">
         <Coins size={12} />
-        <strong>{amount(state?.handCommitted ?? 0)}</strong>
+        <strong>{amount(state?.streetCommitted ?? 0)}</strong>
       </div>
       <div className="player-state-slot">
         {status && (
@@ -338,16 +338,16 @@ function PlayerDetailPopover({
         </header>
         <dl>
           <div>
-            <dt>后手</dt>
-            <dd>{amount(player.stack)}</dd>
-          </div>
-          <div>
             <dt>本街下注</dt>
             <dd>{amount(state?.streetCommitted ?? 0)}</dd>
           </div>
           <div>
             <dt>本手投入</dt>
             <dd>{amount(state?.handCommitted ?? 0)}</dd>
+          </div>
+          <div>
+            <dt>后手</dt>
+            <dd>{amount(player.stack)}</dd>
           </div>
         </dl>
         {statuses.length > 0 && <p>{statuses.join(' · ')}</p>}
@@ -379,6 +379,10 @@ function ActionBar({
   }
   const send = (action: PlayerAction, to?: number) =>
     void command({ type: 'act', action, ...(to !== undefined ? { to } : {}) });
+  const confirmAllIn = () => {
+    if (window.confirm(`确认 All-in 到 ${amount(legal.maxTo)}？此操作会投入全部剩余筹码。`))
+      send('all-in');
+  };
   return (
     <div className="action-bar">
       <div className="action-summary">
@@ -391,7 +395,9 @@ function ActionBar({
           <button
             key={`${shortcut.label}-${shortcut.to}`}
             disabled={busy}
-            onClick={() => send(shortcut.action, shortcut.to)}
+            onClick={() =>
+              shortcut.action === 'all-in' ? confirmAllIn() : send(shortcut.action, shortcut.to)
+            }
           >
             {shortcut.label}
             <b>{amount(shortcut.to)}</b>
@@ -443,7 +449,7 @@ function ActionBar({
         <button
           className="allin-button"
           disabled={busy || !legal.actions.includes('all-in')}
-          onClick={() => send('all-in')}
+          onClick={confirmAllIn}
         >
           All-in
         </button>
@@ -582,24 +588,8 @@ function Showdown({
   );
 }
 
-function TableView({
-  room,
-  busy,
-  command,
-}: {
-  room: RoomView;
-  busy: boolean;
-  command: ReturnType<typeof usePoker>['command'];
-}) {
-  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
-  const seated = [...room.participants]
-    .filter((item) => item.seat !== null)
-    .sort((a, b) => a.seat! - b.seat!);
-  const selfIndex = seated.findIndex((item) => item.id === room.me.participantId);
-  const arranged =
-    selfIndex > 0 ? [...seated.slice(selfIndex), ...seated.slice(0, selfIndex)] : seated;
+function PotSummary({ room }: { room: RoomView }) {
   const hand = room.hand;
-  const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
   const hasSidePots = (hand?.pots.length ?? 0) > 1;
   const total = hand?.players.reduce((sum, item) => sum + item.handCommitted, 0) ?? 0;
   const actorState = hand?.players.find((item) => item.participantId === hand.actorId);
@@ -611,78 +601,190 @@ function TableView({
     : 0;
   return (
     <>
-      <section
-        className={`poker-table ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''}`}
-        aria-label="牌桌与玩家座位"
-      >
-        <div className="table-felt">
-          <div className="table-center">
-            <p className="eyebrow">{hand ? `第 ${hand.number} 手` : '牌桌准备'}</p>
-            <h2>{hand ? streetName[hand.street] : '等待开局'}</h2>
-            <div className="center-pot">
-              <span>底池</span>
-              <strong>{amount(total)}</strong>
-            </div>
-            {hand && (
+      <p className="eyebrow">{hand ? `第 ${hand.number} 手` : '牌桌准备'}</p>
+      <h2>{hand ? streetName[hand.street] : '等待开局'}</h2>
+      <div className="center-pot">
+        <span>底池</span>
+        <strong>{amount(total)}</strong>
+      </div>
+      {hand && (
+        <>
+          <div className="center-meta">
+            <span>
+              盲 {hand.smallBlind}/{hand.bigBlind}
+            </span>
+            {hand.phase === 'BETTING' ? (
               <>
-                <div className="center-meta">
-                  <span>
-                    盲 {hand.smallBlind}/{hand.bigBlind}
-                  </span>
-                  {hand.phase === 'BETTING' ? (
-                    <>
-                      <span>跟 {amount(callAmount)}</span>
-                      <span>
-                        {hand.currentBet > 0 ? '加至' : '下注'} {amount(minimum)}
-                      </span>
-                    </>
-                  ) : (
-                    <span>{hand.phase === 'SETTLED' ? '已结算' : '等待荷官'}</span>
-                  )}
-                </div>
-                {(hasSidePots || hand.uncalled) && (
-                  <div className="center-pots">
-                    {hasSidePots &&
-                      hand.pots.map((pot, index) => (
-                        <div className="center-pot-line" key={pot.id}>
-                          <span>{index === 0 ? '主池' : `边池 ${index}`}</span>
-                          <b>{amount(pot.amount)}</b>
-                          <small>
-                            {pot.eligibleIds
-                              .map((id) => room.participants.find((item) => item.id === id)?.name)
-                              .join(' / ')}
-                          </small>
-                        </div>
-                      ))}
-                    {hand.uncalled && (
-                      <div className="center-pot-line pending">
-                        <span>待跟</span>
-                        <b>{amount(hand.uncalled.amount)}</b>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <span>跟 {amount(callAmount)}</span>
+                <span>
+                  {hand.currentBet > 0 ? '加至' : '下注'} {amount(minimum)}
+                </span>
               </>
+            ) : (
+              <span>{hand.phase === 'SETTLED' ? '已结算' : '等待荷官'}</span>
             )}
           </div>
-        </div>
-        {arranged.map((player, index) => {
-          const angle = Math.PI / 2 + (index * Math.PI * 2) / Math.max(arranged.length, 1);
-          const xRadius = arranged.length >= 7 ? 42 : arranged.length >= 5 ? 39 : 35;
-          const yRadius = arranged.length >= 7 ? 42 : arranged.length >= 5 ? 41 : 39;
-          const x = 50 + Math.cos(angle) * xRadius;
-          const y = 50 + Math.sin(angle) * yRadius;
-          return (
-            <PlayerCard
-              room={room}
-              player={player}
-              key={player.id}
-              style={{ left: `${x}%`, top: `${y}%` }}
-              onSelect={() => setSelectedPlayerId(player.id)}
-            />
-          );
-        })}
-      </section>
+          {(hasSidePots || hand.uncalled) && (
+            <div className="center-pots">
+              {hasSidePots &&
+                hand.pots.map((pot, index) => (
+                  <div className="center-pot-line" key={pot.id}>
+                    <span>{index === 0 ? '主池' : `边池 ${index}`}</span>
+                    <b>{amount(pot.amount)}</b>
+                    <small>
+                      {pot.eligibleIds
+                        .map((id) => room.participants.find((item) => item.id === id)?.name)
+                        .join(' / ')}
+                    </small>
+                  </div>
+                ))}
+              {hand.uncalled && (
+                <div className="center-pot-line pending">
+                  <span>待跟</span>
+                  <b>{amount(hand.uncalled.amount)}</b>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+function PlayerListRow({
+  room,
+  player,
+  onSelect,
+}: {
+  room: RoomView;
+  player: Participant;
+  onSelect: () => void;
+}) {
+  const state = room.hand?.players.find((item) => item.participantId === player.id);
+  const acting = room.hand?.actorId === player.id;
+  const folded = Boolean(state?.folded);
+  const self = room.me.participantId === player.id;
+  return (
+    <button
+      type="button"
+      className={`list-player-row ${acting ? 'acting' : ''} ${folded ? 'folded' : ''} ${self ? 'self' : ''}`}
+      aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}${folded ? '，已 Fold' : ''}`}
+      aria-haspopup="dialog"
+      onClick={onSelect}
+    >
+      <div className="list-player-identity">
+        <span className="seat-number">{(player.seat ?? 0) + 1}</span>
+        <strong title={player.name}>{player.name}</strong>
+        <PositionBadges room={room} id={player.id} />
+      </div>
+      {folded ? (
+        <span className="list-fold">FOLD</span>
+      ) : (
+        <>
+          <span className="list-player-state">
+            {state?.allIn ? 'ALL-IN' : acting ? '行动中' : ''}
+          </span>
+          <span className="list-amount">
+            <small>本街</small>
+            <b>{amount(state?.streetCommitted ?? 0)}</b>
+          </span>
+          <span className="list-amount">
+            <small>本手</small>
+            <b>{amount(state?.handCommitted ?? 0)}</b>
+          </span>
+          <span className="list-amount secondary-value">
+            <small>后手</small>
+            <b>{amount(player.stack)}</b>
+          </span>
+        </>
+      )}
+    </button>
+  );
+}
+
+function TableView({
+  room,
+  busy,
+  command,
+}: {
+  room: RoomView;
+  busy: boolean;
+  command: ReturnType<typeof usePoker>['command'];
+}) {
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
+  const [layout, setLayout] = useState<'table' | 'list'>(() =>
+    localStorage.getItem('poker.tableLayout') === 'list' ? 'list' : 'table',
+  );
+  const seated = [...room.participants]
+    .filter((item) => item.seat !== null)
+    .sort((a, b) => a.seat! - b.seat!);
+  const selfIndex = seated.findIndex((item) => item.id === room.me.participantId);
+  const arranged =
+    selfIndex > 0 ? [...seated.slice(selfIndex), ...seated.slice(0, selfIndex)] : seated;
+  const hand = room.hand;
+  const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
+  const changeLayout = (next: 'table' | 'list') => {
+    setLayout(next);
+    localStorage.setItem('poker.tableLayout', next);
+  };
+  return (
+    <>
+      <div className="table-toolbar" aria-label="牌桌显示方式">
+        <button
+          className={layout === 'table' ? 'active' : ''}
+          onClick={() => changeLayout('table')}
+        >
+          实体桌
+        </button>
+        <button className={layout === 'list' ? 'active' : ''} onClick={() => changeLayout('list')}>
+          列表
+        </button>
+      </div>
+      {layout === 'table' ? (
+        <section
+          className={`poker-table ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''}`}
+          aria-label="牌桌与玩家座位"
+        >
+          <div className="table-felt">
+            <div className="table-center">
+              <PotSummary room={room} />
+            </div>
+          </div>
+          {arranged.map((player, index) => {
+            const angle = Math.PI / 2 + (index * Math.PI * 2) / Math.max(arranged.length, 1);
+            const xRadius = arranged.length >= 7 ? 42 : arranged.length >= 5 ? 39 : 35;
+            const yRadius = arranged.length >= 7 ? 42 : arranged.length >= 5 ? 41 : 39;
+            const x = 50 + Math.cos(angle) * xRadius;
+            const y = 50 + Math.sin(angle) * yRadius;
+            return (
+              <PlayerCard
+                room={room}
+                player={player}
+                key={player.id}
+                style={{ left: `${x}%`, top: `${y}%` }}
+                onSelect={() => setSelectedPlayerId(player.id)}
+              />
+            );
+          })}
+        </section>
+      ) : (
+        <section className="player-list-view" aria-label="玩家列表牌桌">
+          <div className="list-pot-card">
+            <PotSummary room={room} />
+          </div>
+          <div className="list-players">
+            {seated.map((player) => (
+              <PlayerListRow
+                room={room}
+                player={player}
+                key={player.id}
+                onSelect={() => setSelectedPlayerId(player.id)}
+              />
+            ))}
+          </div>
+        </section>
+      )}
       {selectedPlayer && (
         <PlayerDetailPopover
           room={room}
