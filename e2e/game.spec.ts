@@ -579,6 +579,13 @@ test('phone creates a standard room, edits extensions, and exposes a working inv
   const defaultEvilRoles = page.locator('.faction-group.evil');
   await expect(defaultEvilRoles).toContainText('奥伯伦');
   await expect(defaultEvilRoles).not.toContainText('爪牙');
+  const lobbyRules = page.locator('.table-rules');
+  await expect(lobbyRules).not.toContainText('刺客行动');
+  await expect(lobbyRules).not.toContainText('随时刺杀');
+  await lobbyRules.getByRole('button', { name: /了解玩法/ }).click();
+  const help = page.getByRole('dialog', { name: '游戏规则' });
+  await expect(help).toContainText('刺客可以随时进入“我的身份”');
+  await help.getByRole('button', { name: '关闭弹窗' }).click();
   await page.getByRole('button', { name: '调整', exact: true }).click();
   const rules = page.getByRole('dialog', { name: '设置本局规则' });
   await rules.getByRole('button', { name: '自定义规则', exact: true }).click();
