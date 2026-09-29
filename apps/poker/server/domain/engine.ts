@@ -608,38 +608,68 @@ export function legalActions(room: RoomState, participantId: string): LegalActio
   if (owner.stack > 0 && (maxTo <= target || canBet || canRaise)) actions.push('all-in');
   const potTotal = hand.players.reduce((sum, item) => sum + item.handCommitted, 0);
   const shortcuts: LegalActions['shortcuts'] = [];
-  const candidates: { label: string; num: number; den: number }[] = [
-    { label: '1/3 Pot', num: 1, den: 3 },
-    { label: '1/2 Pot', num: 1, den: 2 },
-    { label: '2/3 Pot', num: 2, den: 3 },
-    { label: '3/4 Pot', num: 3, den: 4 },
-    { label: '1 Pot', num: 1, den: 1 },
+  const ratio = (value: number, numerator: number, denominator: number) =>
+    ceilRatio(value, numerator, denominator, room.config.chipUnit);
+  const potCandidates = [
+    { label: '1/3 Pot', raw: ratio(potTotal, 1, 3) },
+    { label: '1/2 Pot', raw: ratio(potTotal, 1, 2) },
+    { label: '2/3 Pot', raw: ratio(potTotal, 2, 3) },
+    { label: '3/4 Pot', raw: ratio(potTotal, 3, 4) },
+    { label: '1 Pot', raw: ratio(potTotal, 1, 1) },
   ];
+  let candidates: { label: string; raw: number }[];
+  if (hand.street === 'PREFLOP' && hand.currentBet <= hand.bigBlind) {
+    candidates = [
+      { label: '2 BB', raw: ratio(hand.bigBlind, 2, 1) },
+      { label: '2.5 BB', raw: ratio(hand.bigBlind, 5, 2) },
+      { label: '3 BB', raw: ratio(hand.bigBlind, 3, 1) },
+      { label: '4 BB', raw: ratio(hand.bigBlind, 4, 1) },
+    ];
+  } else if (hand.street === 'PREFLOP') {
+    candidates = [
+      { label: '2×', raw: ratio(hand.currentBet, 2, 1) },
+      { label: '2.5×', raw: ratio(hand.currentBet, 5, 2) },
+      { label: '3×', raw: ratio(hand.currentBet, 3, 1) },
+      { label: '4×', raw: ratio(hand.currentBet, 4, 1) },
+    ];
+  } else if (hand.currentBet === 0) {
+    candidates = potCandidates;
+  } else {
+    candidates = [
+      { label: '1/3 Pot', raw: ratio(potTotal, 1, 3) },
+      { label: '1/2 Pot', raw: ratio(potTotal, 1, 2) },
+      { label: '2/3 Pot', raw: ratio(potTotal, 2, 3) },
+      { label: '2×', raw: ratio(hand.currentBet, 2, 1) },
+      { label: '2.5×', raw: ratio(hand.currentBet, 5, 2) },
+      { label: '3×', raw: ratio(hand.currentBet, 3, 1) },
+    ];
+  }
+  const minimum = hand.currentBet === 0 ? hand.bigBlind : hand.currentBet + hand.lastFullRaiseSize;
+  const action = hand.currentBet === 0 ? 'bet' : 'raise';
+  candidates.sort((left, right) => left.raw - right.raw);
   for (const candidate of candidates) {
-    const raw =
-      hand.currentBet === 0
-        ? ceilRatio(potTotal, candidate.num, candidate.den, room.config.chipUnit)
-        : player.streetCommitted +
-          callNeeded +
-          ceilRatio(potTotal + callNeeded, candidate.num, candidate.den, room.config.chipUnit);
-    const minimum =
-      hand.currentBet === 0 ? hand.bigBlind : hand.currentBet + hand.lastFullRaiseSize;
-    const to = Math.min(maxTo, Math.max(minimum, raw));
+    const to = Math.min(maxTo, Math.max(minimum, candidate.raw));
     if (to <= player.streetCommitted) continue;
-    const action = hand.currentBet === 0 ? 'bet' : 'raise';
     if ((action === 'bet' && !canBet) || (action === 'raise' && !canRaise)) continue;
     if (!shortcuts.some((item) => item.to === to)) {
       shortcuts.push({
         label:
-          to === minimum && raw < minimum
-            ? '最低'
-            : to === maxTo && raw > maxTo
-              ? 'All-in'
+          to === maxTo
+            ? 'All-in'
+            : to === minimum && candidate.raw < minimum
+              ? '最低'
               : candidate.label,
         action: to === maxTo ? 'all-in' : action,
         to,
       });
     }
+  }
+  if (
+    minimum < maxTo &&
+    ((action === 'bet' && canBet) || (action === 'raise' && canRaise)) &&
+    !shortcuts.some((item) => item.to === minimum)
+  ) {
+    shortcuts.unshift({ label: '最低', action, to: minimum });
   }
   return {
     participantId,
