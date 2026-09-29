@@ -723,6 +723,7 @@ function TableView({
   const arranged =
     selfIndex > 0 ? [...seated.slice(selfIndex), ...seated.slice(0, selfIndex)] : seated;
   const hand = room.hand;
+  const compactTable = Boolean(room.legalActions);
   const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
   const changeLayout = (next: 'table' | 'list') => {
     setLayout(next);
@@ -743,7 +744,7 @@ function TableView({
       </div>
       {layout === 'table' ? (
         <section
-          className={`poker-table ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''}`}
+          className={`poker-table ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
           aria-label="牌桌与玩家座位"
         >
           <div className="table-felt">
@@ -753,8 +754,23 @@ function TableView({
           </div>
           {arranged.map((player, index) => {
             const angle = Math.PI / 2 + (index * Math.PI * 2) / Math.max(arranged.length, 1);
-            const xRadius = arranged.length >= 7 ? 42 : arranged.length >= 5 ? 39 : 35;
-            const yRadius = arranged.length >= 7 ? 42 : arranged.length >= 5 ? 41 : 39;
+            const xRadius =
+              compactTable && arranged.length >= 7
+                ? 40
+                : arranged.length >= 7
+                  ? 42
+                  : arranged.length >= 5
+                    ? 39
+                    : 35;
+            const yRadius = compactTable
+              ? arranged.length >= 7
+                ? 39
+                : 38
+              : arranged.length >= 7
+                ? 42
+                : arranged.length >= 5
+                  ? 41
+                  : 39;
             const x = 50 + Math.cos(angle) * xRadius;
             const y = 50 + Math.sin(angle) * yRadius;
             return (
