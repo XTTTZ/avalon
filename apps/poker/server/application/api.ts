@@ -78,9 +78,31 @@ function validateSettlement(value: unknown) {
       throw new PokerError('INVALID', '结算内容无效');
     const choice = item as Record<string, unknown>;
     validatePotId(choice.potId);
-    if (!Array.isArray(choice.winnerIds) || choice.winnerIds.length > 10)
-      throw new PokerError('INVALID', '赢家列表无效');
-    for (const winner of choice.winnerIds) validateEntityId(winner, '赢家');
+    if (choice.runs !== undefined) {
+      if (
+        choice.winnerIds !== undefined ||
+        !Array.isArray(choice.runs) ||
+        choice.runs.length < 1 ||
+        choice.runs.length > 5
+      )
+        throw new PokerError('INVALID', '跑马结算无效');
+      for (const rawRun of choice.runs) {
+        if (!rawRun || typeof rawRun !== 'object' || Array.isArray(rawRun))
+          throw new PokerError('INVALID', '跑马结算无效');
+        const run = rawRun as Record<string, unknown>;
+        if (!Array.isArray(run.winnerIds) || run.winnerIds.length < 1 || run.winnerIds.length > 10)
+          throw new PokerError('INVALID', '赢家列表无效');
+        for (const winner of run.winnerIds) validateEntityId(winner, '赢家');
+      }
+    } else {
+      if (
+        !Array.isArray(choice.winnerIds) ||
+        choice.winnerIds.length < 1 ||
+        choice.winnerIds.length > 10
+      )
+        throw new PokerError('INVALID', '赢家列表无效');
+      for (const winner of choice.winnerIds) validateEntityId(winner, '赢家');
+    }
   }
 }
 

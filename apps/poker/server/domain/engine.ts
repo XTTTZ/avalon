@@ -293,7 +293,10 @@ export function joinRoom(
       returning.active = as === 'player' && betweenHands(room);
       if (returning.active && returning.seat === null) {
         const used = new Set(
-          room.participants.map((item) => item.seat).filter((seat) => seat !== null),
+          room.participants
+            .filter((item) => item.active)
+            .map((item) => item.seat)
+            .filter((seat) => seat !== null),
         );
         let seat = 0;
         while (used.has(seat)) seat += 1;
@@ -332,7 +335,10 @@ export function joinRoom(
     const participantId = randomUUID();
     const canSeat = !room.hand || ['SETTLED', 'VOIDED'].includes(room.hand.phase);
     const used = new Set(
-      room.participants.map((item) => item.seat).filter((seat) => seat !== null),
+      room.participants
+        .filter((item) => item.active)
+        .map((item) => item.seat)
+        .filter((seat) => seat !== null),
     );
     let seat = 0;
     while (used.has(seat)) seat += 1;
@@ -504,7 +510,7 @@ function closeRound(room: RoomState, actorMemberId: string, now: number) {
     hand.phase = 'SHOWDOWN';
     hand.settlementDraft = hand.pots.map((pot) => ({
       potId: pot.id,
-      winnerIds: [live[0].participantId],
+      runs: [{ winnerIds: [live[0].participantId] }],
     }));
     event(room, actorMemberId, 'STREET_READY', '其他玩家均已弃牌，等待荷官确认发放', {}, now);
     return;
@@ -707,7 +713,13 @@ function startHand(
   if (!room.lastButtonId) {
     invalid(button && ids.includes(button), '请选择首手 Button');
   } else {
-    button = rotateAfter(ids, room.lastButtonId);
+    const previousButton = room.hand?.players.find(
+      (item) => item.participantId === room.lastButtonId,
+    );
+    button = ids.includes(room.lastButtonId)
+      ? rotateAfter(ids, room.lastButtonId)
+      : (seats.find((item) => item.seat! > (previousButton?.seat ?? Number.MAX_SAFE_INTEGER))?.id ??
+        seats[0].id);
   }
   const smallBlindId = ids.length === 2 ? button! : rotateAfter(ids, button!);
   const bigBlindId = rotateAfter(ids, smallBlindId);
@@ -887,7 +899,7 @@ function confirmStreet(room: RoomState, actorMemberId: string, now: number) {
     hand.phase = 'SHOWDOWN';
     hand.settlementDraft = hand.pots
       .filter((pot) => pot.eligibleIds.length === 1)
-      .map((pot) => ({ potId: pot.id, winnerIds: [...pot.eligibleIds] }));
+      .map((pot) => ({ potId: pot.id, runs: [{ winnerIds: [...pot.eligibleIds] }] }));
     return confirmed;
   }
   hand.phase = 'BETTING';
@@ -911,14 +923,24 @@ function normalizedChoices(hand: HandState, choices: SettlementChoice[]) {
   invalid(choices.length === hand.pots.length, '请为每个底池指定赢家');
   return hand.pots.map((pot) => {
     const choice = choices.find((item) => item.potId === pot.id);
-    invalid(choice && choice.winnerIds.length > 0, '每个底池至少选择一位赢家');
-    const unique = [...new Set(choice.winnerIds)];
-    invalid(unique.length === choice.winnerIds.length, '赢家不能重复');
-    invalid(
-      unique.every((id) => pot.eligibleIds.includes(id)),
-      '赢家没有资格争夺该底池',
-    );
-    return { potId: pot.id, winnerIds: unique };
+    invalid(choice, '请为每个底池指定赢家');
+    const rawRuns = choice.runs?.length
+      ? choice.runs
+      : choice.winnerIds?.length
+        ? [{ winnerIds: choice.winnerIds }]
+        : [];
+    invalid(rawRuns.length > 0 && rawRuns.length <= Math.min(5, pot.amount), '跑马次数无效');
+    const runs = rawRuns.map((run) => {
+      invalid(run.winnerIds.length > 0, '每次跑马至少选择一位赢家');
+      const unique = [...new Set(run.winnerIds)];
+      invalid(unique.length === run.winnerIds.length, '赢家不能重复');
+      invalid(
+        unique.every((id) => pot.eligibleIds.includes(id)),
+        '赢家没有资格争夺该底池',
+      );
+      return { winnerIds: unique };
+    });
+    return { potId: pot.id, runs };
   });
 }
 
@@ -936,20 +958,27 @@ function settle(room: RoomState, actorMemberId: string, choices: SettlementChoic
   const payouts = new Map<string, number>();
   const shares = new Map<string, number>();
   for (const pot of hand.pots) {
-    const winners = normalized.find((item) => item.potId === pot.id)!.winnerIds;
-    const each = Math.floor(pot.amount / winners.length);
-    let remainder = pot.amount % winners.length;
-    for (const id of winners) {
-      payouts.set(id, (payouts.get(id) ?? 0) + each);
-      shares.set(id, Math.max(shares.get(id) ?? 0, each));
-    }
-    for (const id of oddOrder) {
-      if (remainder === 0) break;
-      if (winners.includes(id)) {
-        payouts.set(id, (payouts.get(id) ?? 0) + 1);
-        shares.set(id, Math.max(shares.get(id) ?? 0, each + 1));
-        remainder -= 1;
+    const runs = normalized.find((item) => item.potId === pot.id)!.runs;
+    const baseRunAmount = Math.floor(pot.amount / runs.length);
+    let extraRuns = pot.amount % runs.length;
+    const potPayouts = new Map<string, number>();
+    for (const run of runs) {
+      const runAmount = baseRunAmount + (extraRuns > 0 ? 1 : 0);
+      if (extraRuns > 0) extraRuns -= 1;
+      const each = Math.floor(runAmount / run.winnerIds.length);
+      let remainder = runAmount % run.winnerIds.length;
+      for (const id of run.winnerIds) potPayouts.set(id, (potPayouts.get(id) ?? 0) + each);
+      for (const id of oddOrder) {
+        if (remainder === 0) break;
+        if (run.winnerIds.includes(id)) {
+          potPayouts.set(id, (potPayouts.get(id) ?? 0) + 1);
+          remainder -= 1;
+        }
       }
+    }
+    for (const [id, amount] of potPayouts) {
+      payouts.set(id, (payouts.get(id) ?? 0) + amount);
+      shares.set(id, Math.max(shares.get(id) ?? 0, amount));
     }
   }
   const totalPots = hand.pots.reduce((sum, pot) => sum + pot.amount, 0);
@@ -1013,6 +1042,26 @@ function assertOwner(room: RoomState, memberId: string) {
 
 function betweenHands(room: RoomState) {
   return !room.hand || ['SETTLED', 'VOIDED'].includes(room.hand.phase);
+}
+
+function moveBustedPlayersToSpectators(room: RoomState, actorMemberId: string, now: number) {
+  if (!betweenHands(room)) return;
+  const busted = room.participants.filter(
+    (item) => item.stack === 0 && (item.active || item.seat !== null),
+  );
+  if (!busted.length) return;
+  for (const player of busted) {
+    player.active = false;
+    player.seat = null;
+  }
+  event(
+    room,
+    actorMemberId,
+    'SEATS_CHANGED',
+    `${busted.map((item) => item.name).join('、')} 筹码归零，自动进入旁观席`,
+    {},
+    now,
+  );
 }
 
 export function applyCommand(
@@ -1173,7 +1222,10 @@ export function applyCommand(
       before = snapshot(room);
       const participantId = randomUUID();
       const used = new Set(
-        room.participants.map((item) => item.seat).filter((seat) => seat !== null),
+        room.participants
+          .filter((item) => item.active)
+          .map((item) => item.seat)
+          .filter((seat) => seat !== null),
       );
       let seat = 0;
       while (used.has(seat)) seat += 1;
@@ -1209,7 +1261,7 @@ export function applyCommand(
     case 'reorder': {
       assertOwner(room, actor.id);
       invalid(betweenHands(room), '请在两手之间调整座位');
-      const seated = room.participants.filter((item) => item.seat !== null);
+      const seated = room.participants.filter((item) => item.active && item.seat !== null);
       invalid(
         command.participantIds.length === seated.length &&
           new Set(command.participantIds).size === seated.length &&
@@ -1222,29 +1274,36 @@ export function applyCommand(
       break;
     }
     case 'set-participant-active': {
-      assertOwner(room, actor.id);
       invalid(betweenHands(room), '请在两手之间调整入座状态');
       const target = participant(room, command.participantId);
+      if (actor.participantId !== target.id) assertOwner(room, actor.id);
       invalid(
         room.members.some((item) => item.id === target.memberId && !item.removedAt),
         '该玩家已离开房间',
       );
-      if (command.active && !target.active) invalid(activeSeats(room).length < 10, '牌桌座位已满');
+      if (command.active && !target.active) {
+        invalid(target.stack > 0, '后手为 0，请先让荷官补码');
+        invalid(activeSeats(room).length < 10, '牌桌座位已满');
+      }
       before = snapshot(room);
       target.active = command.active;
       if (command.active && target.seat === null) {
         const seats = new Set(
-          room.participants.map((item) => item.seat).filter((seat) => seat !== null),
+          room.participants
+            .filter((item) => item.active)
+            .map((item) => item.seat)
+            .filter((seat) => seat !== null),
         );
         let seat = 0;
         while (seats.has(seat)) seat += 1;
         target.seat = seat;
       }
+      if (!command.active) target.seat = null;
       primary = event(
         room,
         actor.id,
         'SEATS_CHANGED',
-        `${target.name}${command.active ? ' 入座' : ' 暂停参与'}`,
+        `${target.name}${command.active ? ' 入座' : ' 进入旁观席'}`,
         {},
         now,
       );
@@ -1372,6 +1431,7 @@ export function applyCommand(
       primary = event(room, actor.id, 'RULES_CHANGED', '房主更新了牌局规则', {}, now);
       break;
   }
+  moveBustedPlayersToSpectators(room, actor.id, now);
   const currentActor = room.members.find((item) => item.id === actor.id && !item.removedAt);
   if (currentActor) currentActor.lastActiveAt = now;
   if (before && primary) keepUndo(room, before, primary.id);

@@ -68,7 +68,8 @@ export interface Pot {
 
 export interface SettlementChoice {
   potId: string;
-  winnerIds: string[];
+  runs?: { winnerIds: string[] }[];
+  winnerIds?: string[];
 }
 
 export interface HandState {

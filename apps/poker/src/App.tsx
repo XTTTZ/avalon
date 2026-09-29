@@ -521,62 +521,127 @@ function Showdown({
   command: ReturnType<typeof usePoker>['command'];
 }) {
   const hand = room.hand;
-  const [choices, setChoices] = useState<SettlementChoice[]>(() => hand?.settlementDraft ?? []);
+  const makeChoices = (currentHand: NonNullable<RoomView['hand']>) =>
+    currentHand.pots.map((pot) => {
+      const existing = currentHand.settlementDraft.find((item) => item.potId === pot.id);
+      const runs = existing?.runs?.length
+        ? existing.runs.map((run) => ({ winnerIds: [...run.winnerIds] }))
+        : existing?.winnerIds?.length
+          ? [{ winnerIds: [...existing.winnerIds] }]
+          : [
+              {
+                winnerIds: pot.eligibleIds.length === 1 ? [...pot.eligibleIds] : [],
+              },
+            ];
+      return { potId: pot.id, runs };
+    });
+  const [choices, setChoices] = useState<SettlementChoice[]>(() => (hand ? makeChoices(hand) : []));
   useEffect(() => {
-    if (hand?.phase === 'SHOWDOWN') setChoices(hand.settlementDraft);
+    if (hand?.phase === 'SHOWDOWN') setChoices(makeChoices(hand));
   }, [hand?.id, hand?.phase, hand?.settlementDraft]);
   if (!hand || hand.phase !== 'SHOWDOWN') return null;
-  const toggle = (potId: string, participantId: string) => {
-    setChoices((current) => {
-      const existing = current.find((item) => item.potId === potId);
-      const winners = existing?.winnerIds.includes(participantId)
-        ? existing.winnerIds.filter((id) => id !== participantId)
-        : [...(existing?.winnerIds ?? []), participantId];
-      return [...current.filter((item) => item.potId !== potId), { potId, winnerIds: winners }];
-    });
+  const toggle = (potId: string, runIndex: number, participantId: string) => {
+    setChoices((current) =>
+      current.map((choice) => {
+        if (choice.potId !== potId || !choice.runs) return choice;
+        const runs = choice.runs.map((run, index) => {
+          if (index !== runIndex) return run;
+          return {
+            winnerIds: run.winnerIds.includes(participantId)
+              ? run.winnerIds.filter((id) => id !== participantId)
+              : [...run.winnerIds, participantId],
+          };
+        });
+        return { potId, runs };
+      }),
+    );
   };
+  const setRunCount = (potId: string, count: number, eligibleIds: string[]) => {
+    setChoices((current) =>
+      current.map((choice) => {
+        if (choice.potId !== potId) return choice;
+        const existing = choice.runs ?? [];
+        const defaultWinners = eligibleIds.length === 1 ? [...eligibleIds] : [];
+        const runs = Array.from({ length: count }, (_, index) =>
+          existing[index] ? existing[index] : { winnerIds: defaultWinners },
+        );
+        return { potId, runs };
+      }),
+    );
+  };
+  const complete = hand.pots.every((pot) => {
+    const runs = choices.find((item) => item.potId === pot.id)?.runs;
+    return Boolean(runs?.length && runs.every((run) => run.winnerIds.length > 0));
+  });
   return (
     <section className="card showdown">
       <p className="eyebrow">Showdown</p>
       <h2>指定每个底池赢家</h2>
-      <p className="muted">多人勾选即平分；余数按 Button 左侧顺时针分配。</p>
-      {hand.pots.map((pot, index) => (
-        <div className="pot-choice" key={pot.id}>
-          <div>
-            <strong>
-              {index === 0 ? '主池' : `边池 ${index}`} · {amount(pot.amount)}
-            </strong>
-          </div>
-          <div className="winner-grid">
-            {pot.eligibleIds.map((id) => {
-              const player = room.participants.find((item) => item.id === id)!;
-              const selected = choices
-                .find((item) => item.potId === pot.id)
-                ?.winnerIds.includes(id);
-              return (
+      <p className="muted">
+        可为每个底池选择跑一次或多次；每次多人勾选即平分，余数按 Button 左侧顺时针分配。
+      </p>
+      {hand.pots.map((pot, index) => {
+        const runs = choices.find((item) => item.potId === pot.id)?.runs ?? [{ winnerIds: [] }];
+        const baseRunAmount = Math.floor(pot.amount / runs.length);
+        const extraRuns = pot.amount % runs.length;
+        return (
+          <div className="pot-choice" key={pot.id}>
+            <div className="pot-choice-header">
+              <strong>
+                {index === 0 ? '主池' : `边池 ${index}`} · {amount(pot.amount)}
+              </strong>
+              <div className="run-count" aria-label="跑马次数">
                 <button
-                  className={selected ? 'selected' : ''}
-                  key={id}
-                  onClick={() => toggle(pot.id, id)}
+                  aria-label="减少跑马次数"
+                  disabled={!room.me.isDealer || busy || runs.length <= 1}
+                  onClick={() => setRunCount(pot.id, runs.length - 1, pot.eligibleIds)}
                 >
-                  <span className="avatar small">{player.name.slice(0, 1)}</span>
-                  {player.name}
-                  {selected && <Check size={16} />}
+                  −
                 </button>
-              );
-            })}
+                <span>跑 {runs.length} 次</span>
+                <button
+                  aria-label="增加跑马次数"
+                  disabled={!room.me.isDealer || busy || runs.length >= Math.min(5, pot.amount)}
+                  onClick={() => setRunCount(pot.id, runs.length + 1, pot.eligibleIds)}
+                >
+                  +
+                </button>
+              </div>
+            </div>
+            {runs.map((run, runIndex) => (
+              <div className="run-choice" key={`${pot.id}-run-${runIndex}`}>
+                {runs.length > 1 && (
+                  <strong className="run-label">
+                    第 {runIndex + 1} 次 · {amount(baseRunAmount + (runIndex < extraRuns ? 1 : 0))}
+                  </strong>
+                )}
+                <div className="winner-grid">
+                  {pot.eligibleIds.map((id) => {
+                    const player = room.participants.find((item) => item.id === id)!;
+                    const selected = run.winnerIds.includes(id);
+                    return (
+                      <button
+                        className={selected ? 'selected' : ''}
+                        disabled={!room.me.isDealer || busy}
+                        key={id}
+                        onClick={() => toggle(pot.id, runIndex, id)}
+                      >
+                        <span className="avatar small">{player.name.slice(0, 1)}</span>
+                        {player.name}
+                        {selected && <Check size={16} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
-        </div>
-      ))}
+        );
+      })}
       {room.me.isDealer ? (
         <button
           className="primary wide"
-          disabled={
-            busy ||
-            hand.pots.some(
-              (pot) => !choices.find((item) => item.potId === pot.id)?.winnerIds.length,
-            )
-          }
+          disabled={busy || !complete}
           onClick={() => void command({ type: 'settle', pots: choices })}
         >
           确认并发放全部底池
@@ -717,7 +782,7 @@ function TableView({
     localStorage.getItem('poker.tableLayout') === 'list' ? 'list' : 'table',
   );
   const seated = [...room.participants]
-    .filter((item) => item.seat !== null)
+    .filter((item) => item.active && item.seat !== null)
     .sort((a, b) => a.seat! - b.seat!);
   const selfIndex = seated.findIndex((item) => item.id === room.me.participantId);
   const arranged =
@@ -993,7 +1058,7 @@ function ManageView({
   const activeMemberIds = new Set(room.members.map((item) => item.id));
   const currentPlayers = room.participants.filter((item) => activeMemberIds.has(item.memberId));
   const seated = [...currentPlayers]
-    .filter((item) => item.seat !== null)
+    .filter((item) => item.active && item.seat !== null)
     .sort((a, b) => a.seat! - b.seat!);
   const move = (id: string, direction: -1 | 1) => {
     const ids = seated.map((item) => item.id);
@@ -1122,10 +1187,12 @@ function ManageView({
       </section>
       <section className="card">
         <h2>玩家与座次</h2>
+        <p className="muted">玩家可在两手之间自行入座或进入旁观席；后手为 0 时需先由荷官补码。</p>
         {currentPlayers.map((player) => {
           const index = seated.findIndex((item) => item.id === player.id);
           const isSeated = index >= 0 && player.active;
           const playerMember = room.members.find((item) => item.id === player.memberId)!;
+          const canControlSeat = room.me.isOwner || room.me.participantId === player.id;
           return (
             <div className="manage-player" key={player.id}>
               <div className="manage-player-info">
@@ -1133,14 +1200,14 @@ function ManageView({
                 <span className="manage-player-copy">
                   <strong title={player.name}>{player.name}</strong>
                   <small>
-                    {isSeated ? `${(player.seat ?? 0) + 1}号位` : '未入座'} · {amount(player.stack)}{' '}
+                    {isSeated ? `${(player.seat ?? 0) + 1}号位` : '旁观席'} · {amount(player.stack)}{' '}
                     筹码
                   </small>
                 </span>
               </div>
-              {room.me.isOwner && (
+              {canControlSeat && (
                 <div className="seat-tools">
-                  {isSeated && (
+                  {room.me.isOwner && isSeated && (
                     <>
                       <button
                         aria-label="上移"
@@ -1160,7 +1227,8 @@ function ManageView({
                   )}
                   <button
                     className="chip-button"
-                    disabled={busy || !betweenHands}
+                    disabled={busy || !betweenHands || (!isSeated && player.stack === 0)}
+                    title={!isSeated && player.stack === 0 ? '请先由荷官补码' : undefined}
                     onClick={() =>
                       void command({
                         type: 'set-participant-active',
@@ -1169,9 +1237,9 @@ function ManageView({
                       })
                     }
                   >
-                    {isSeated ? '暂停' : '入座'}
+                    {isSeated ? '旁观' : '入座'}
                   </button>
-                  {playerMember.id !== room.ownerMemberId && (
+                  {room.me.isOwner && playerMember.id !== room.ownerMemberId && (
                     <button
                       className="icon-danger"
                       aria-label={`移除 ${player.name}`}
