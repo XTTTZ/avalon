@@ -11,6 +11,7 @@ import {
   createRoom,
   joinRoom,
   projectRoom,
+  touchRoomActivity,
   validateConfig,
 } from '../domain/engine.js';
 import {
@@ -165,7 +166,7 @@ function validateRequest(input: unknown): asserts input is ApiRequest {
   const value = input as Record<string, unknown>;
   if (typeof value.action !== 'string') throw new PokerError('INVALID', '未知操作');
   if (['create', 'join', 'command'].includes(value.action)) validateId(value.requestId);
-  if (['join', 'get', 'command'].includes(value.action)) validateCode(value.code);
+  if (['join', 'get', 'heartbeat', 'command'].includes(value.action)) validateCode(value.code);
   if (value.action === 'create') {
     validateName(value.name);
     validateConfig(value.config as GameConfig);
@@ -175,14 +176,22 @@ function validateRequest(input: unknown): asserts input is ApiRequest {
     if (!['player', 'spectator'].includes(String(value.as)))
       throw new PokerError('INVALID', '加入方式无效');
   }
-  if (value.action === 'get' && value.version !== undefined && !Number.isSafeInteger(value.version))
+  if (
+    ['get', 'heartbeat'].includes(value.action) &&
+    value.version !== undefined &&
+    !Number.isSafeInteger(value.version)
+  )
     throw new PokerError('INVALID', '版本无效');
   if (value.action === 'command') {
     if (!Number.isSafeInteger(value.expectedVersion) || typeof value.phaseKey !== 'string')
       throw new PokerError('INVALID', '牌局版本无效');
     validateCommand(value.command);
   }
-  if (!['auth.guest', 'session', 'create', 'join', 'get', 'command'].includes(value.action))
+  if (
+    !['auth.guest', 'session', 'create', 'join', 'get', 'heartbeat', 'command'].includes(
+      value.action,
+    )
+  )
     throw new PokerError('INVALID', '未知操作');
 }
 
@@ -269,6 +278,18 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
     const view = projectRoom(record.state, claims.userId);
     if (input.version === view.version) return { unchanged: true, version: view.version };
     return view;
+  }
+  if (input.action === 'heartbeat') {
+    return deps.store.transaction(async (transaction) => {
+      await ensureUser(transaction, claims.userId, now);
+      const record = active(await transaction.get<RoomRecord>('rooms', input.code), now);
+      roomRate(record, claims.userId, now);
+      record.state = touchRoomActivity(record.state, claims.userId, now);
+      await saveRoom(transaction, record);
+      const view = projectRoom(record.state, claims.userId);
+      if (input.version === view.version) return { unchanged: true, version: view.version };
+      return view;
+    });
   }
   if (input.action === 'command') {
     const hash = digest(input.command);

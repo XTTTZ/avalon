@@ -14,6 +14,7 @@ const KEY_SESSION = `${PREFIX}session`;
 const KEY_DEVICE = `${PREFIX}device`;
 const KEY_ROOM = `${PREFIX}room`;
 const KEY_PENDING = `${PREFIX}pending`;
+const HEARTBEAT_INTERVAL = 10 * 60_000;
 
 export class ClientError extends Error {
   constructor(
@@ -84,6 +85,7 @@ export function usePoker() {
   const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef(session);
   const roomRef = useRef(room);
+  const lastHeartbeatRef = useRef(0);
   sessionRef.current = session;
   roomRef.current = room;
 
@@ -132,13 +134,26 @@ export function usePoker() {
       const roomCode = code ?? roomRef.current?.code ?? read<string>(KEY_ROOM);
       if (!currentSession || !roomCode) return;
       try {
+        const shouldHeartbeat =
+          !document.hidden && Date.now() - lastHeartbeatRef.current >= HEARTBEAT_INTERVAL;
+        const request: ApiRequest = shouldHeartbeat
+          ? { action: 'heartbeat', code: roomCode, version: roomRef.current?.version }
+          : { action: 'get', code: roomCode, version: roomRef.current?.version };
         const result = await call<RoomView | { unchanged: true; version: number }>(
-          { action: 'get', code: roomCode, version: roomRef.current?.version },
+          request,
           currentSession.token,
         );
+        if (shouldHeartbeat) lastHeartbeatRef.current = Date.now();
         if (!('unchanged' in result)) accept(result);
         else setConnection('online');
       } catch (syncError) {
+        if (syncError instanceof ClientError && syncError.code === 'NOT_FOUND') {
+          localStorage.removeItem(KEY_ROOM);
+          setRoom(null);
+          setConnection('online');
+          setError('房间长期未活跃，已自动解散');
+          return;
+        }
         if (!silent) setError(syncError instanceof Error ? syncError.message : '同步失败');
         setConnection('offline');
       }

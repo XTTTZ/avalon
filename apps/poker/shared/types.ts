@@ -24,6 +24,7 @@ export interface RoomMember {
   userId: string;
   name: string;
   joinedAt: number;
+  lastActiveAt?: number;
   participantId?: string;
   removedAt?: number;
 }
@@ -165,6 +166,7 @@ export interface RoomState {
   phaseKey: string;
   createdAt: number;
   updatedAt: number;
+  lastActiveAt?: number;
   expiresAt: number;
   ownerMemberId: string;
   dealerMemberId: string | null;
@@ -193,7 +195,7 @@ export interface LegalActions {
   shortcuts: { label: string; action: 'bet' | 'raise' | 'all-in'; to: number }[];
 }
 
-export type PublicRoomMember = Omit<RoomMember, 'userId' | 'removedAt'>;
+export type PublicRoomMember = Omit<RoomMember, 'userId' | 'removedAt' | 'lastActiveAt'>;
 
 export interface RoomView extends Omit<RoomState, 'undo' | 'ledger' | 'members'> {
   members: PublicRoomMember[];
@@ -234,6 +236,7 @@ export type ApiRequest =
   | { action: 'create'; name: string; config: GameConfig; requestId: string }
   | { action: 'join'; code: string; name: string; as: 'player' | 'spectator'; requestId: string }
   | { action: 'get'; code: string; version?: number }
+  | { action: 'heartbeat'; code: string; version?: number }
   | {
       action: 'command';
       code: string;

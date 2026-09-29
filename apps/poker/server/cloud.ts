@@ -13,6 +13,8 @@ interface CloudEvent {
 }
 
 let runtime: { store: PostgresStore; handler: ReturnType<typeof createHttpHandler> } | undefined;
+const CLEANUP_BATCH_SIZE = 400;
+const MAX_CLEANUP_BATCHES = 10;
 
 function getRuntime() {
   if (runtime) return runtime;
@@ -34,8 +36,18 @@ export async function main(event: CloudEvent) {
   try {
     const { store, handler } = getRuntime();
     const method = event.httpMethod ?? event.requestContext?.http?.method;
-    if (!method && event.Type === 'Timer' && event.TriggerName === 'poker-cleanup')
-      return { deleted: await store.cleanup(Date.now(), 400) };
+    if (!method && event.Type === 'Timer' && event.TriggerName === 'poker-cleanup') {
+      const now = Date.now();
+      let deleted = 0;
+      let batches = 0;
+      while (batches < MAX_CLEANUP_BATCHES) {
+        const batch = await store.cleanup(now, CLEANUP_BATCH_SIZE);
+        deleted += batch;
+        batches += 1;
+        if (batch < CLEANUP_BATCH_SIZE) break;
+      }
+      return { deleted, batches };
+    }
     if (!method) return { ok: false, error: { code: 'FORBIDDEN', message: '请使用 HTTP API' } };
     const raw = typeof event.body === 'string' ? event.body : '';
     const body = event.isBase64Encoded ? Buffer.from(raw, 'base64').toString('utf8') : raw;

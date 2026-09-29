@@ -18,7 +18,8 @@ import {
 } from '../../shared/types.js';
 
 const DAY = 86_400_000;
-const ROOM_TTL = 30 * DAY;
+const DRAFT_ROOM_TTL = 7 * DAY;
+const ACTIVE_ROOM_TTL = 30 * DAY;
 const MAX_STACK = 1_000_000_000;
 const MAX_TOTAL = 1_000_000_000_000;
 
@@ -92,11 +93,16 @@ function event(
   return entry;
 }
 
+function roomTtl(room: RoomState) {
+  return room.hand || room.completedHands > 0 ? ACTIVE_ROOM_TTL : DRAFT_ROOM_TTL;
+}
+
 function finish(room: RoomState, now: number) {
   room.version += 1;
   room.phaseKey = randomUUID();
   room.updatedAt = now;
-  room.expiresAt = now + ROOM_TTL;
+  room.lastActiveAt = now;
+  room.expiresAt = now + roomTtl(room);
   if (room.hand) room.hand.revision += 1;
   return room;
 }
@@ -205,7 +211,8 @@ export function createRoom(
     phaseKey: randomUUID(),
     createdAt: now,
     updatedAt: now,
-    expiresAt: now + ROOM_TTL,
+    lastActiveAt: now,
+    expiresAt: now + DRAFT_ROOM_TTL,
     ownerMemberId: memberId,
     dealerMemberId: null,
     paused: false,
@@ -214,7 +221,9 @@ export function createRoom(
     nextBlinds: null,
     completedHands: 0,
     lastButtonId: null,
-    members: [{ id: memberId, userId, name: cleanName, joinedAt: now, participantId }],
+    members: [
+      { id: memberId, userId, name: cleanName, joinedAt: now, lastActiveAt: now, participantId },
+    ],
     participants: [
       {
         id: participantId,
@@ -256,7 +265,10 @@ export function joinRoom(
   const existing = room.members.find((item) => item.userId === userId);
   const cleanName = normalizeName(name);
   invalid(cleanName.length >= 1 && cleanName.length <= 24, '名字须为 1–24 个字符');
-  if (existing && !existing.removedAt) return finish(room, now);
+  if (existing && !existing.removedAt) {
+    existing.lastActiveAt = now;
+    return finish(room, now);
+  }
   invalid(room.members.filter((item) => !item.removedAt).length < 32, '房间人数已满');
   invalid(
     !room.members.some(
@@ -268,6 +280,7 @@ export function joinRoom(
   if (existing?.removedAt) {
     existing.removedAt = undefined;
     existing.joinedAt = now;
+    existing.lastActiveAt = now;
     existing.name = cleanName;
     if (existing.participantId) {
       if (as === 'player')
@@ -305,7 +318,14 @@ export function joinRoom(
     }
   }
   const memberId = randomUUID();
-  const memberRecord = existing ?? { id: memberId, userId, name: cleanName, joinedAt: now };
+  const memberRecord = existing ?? {
+    id: memberId,
+    userId,
+    name: cleanName,
+    joinedAt: now,
+    lastActiveAt: now,
+  };
+  memberRecord.lastActiveAt = now;
   if (!existing) room.members.push(memberRecord);
   if (as === 'player') {
     invalid(activePlayerMembers(room).length < 10, '牌桌座位已满');
@@ -1322,9 +1342,20 @@ export function applyCommand(
       primary = event(room, actor.id, 'RULES_CHANGED', '房主更新了牌局规则', {}, now);
       break;
   }
+  const currentActor = room.members.find((item) => item.id === actor.id && !item.removedAt);
+  if (currentActor) currentActor.lastActiveAt = now;
   if (before && primary) keepUndo(room, before, primary.id);
   assertChipConservation(room);
   return finish(room, now);
+}
+
+export function touchRoomActivity(source: RoomState, userId: string, now = Date.now()) {
+  const room = copy(source);
+  const activeMember = member(room, userId);
+  activeMember.lastActiveAt = now;
+  room.lastActiveAt = now;
+  room.expiresAt = now + roomTtl(room);
+  return room;
 }
 
 export function projectRoom(room: RoomState, userId: string): RoomView {
@@ -1334,7 +1365,9 @@ export function projectRoom(room: RoomState, userId: string): RoomView {
     ...publicRoom,
     members: publicRoom.members
       .filter((item) => !item.removedAt)
-      .map(({ userId: _userId, removedAt: _removedAt, ...item }) => item),
+      .map(
+        ({ userId: _userId, removedAt: _removedAt, lastActiveAt: _lastActiveAt, ...item }) => item,
+      ),
     me: {
       memberId: self.id,
       participantId: self.participantId ?? null,

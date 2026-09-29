@@ -4,7 +4,7 @@ import type { Store, Transaction } from './store.js';
 
 const DAY = 86_400_000;
 const SESSION_TTL = 180 * DAY;
-export const USER_TTL = 365 * DAY;
+export const USER_TTL = 30 * DAY;
 
 export interface Receipt {
   id: string;
@@ -79,13 +79,16 @@ export async function ensureUser(
   now: number,
 ) {
   const existing = await transaction.get<UserRecord>('users', userId);
-  const user: UserRecord = existing ?? {
-    userId,
-    lastRoom: null,
-    receipts: [],
-    recentActions: [],
-    expiresAt: now + USER_TTL,
-  };
+  const user: UserRecord =
+    existing && existing.expiresAt > now
+      ? existing
+      : {
+          userId,
+          lastRoom: null,
+          receipts: [],
+          recentActions: [],
+          expiresAt: now + USER_TTL,
+        };
   user.receipts ??= [];
   user.recentActions ??= [];
   user.expiresAt = now + USER_TTL;
