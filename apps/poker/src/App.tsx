@@ -1057,6 +1057,7 @@ function ManageView({
   const betweenHands = !room.hand || ['SETTLED', 'VOIDED'].includes(room.hand.phase);
   const activeMemberIds = new Set(room.members.map((item) => item.id));
   const currentPlayers = room.participants.filter((item) => activeMemberIds.has(item.memberId));
+  const spectatorMembers = room.members.filter((item) => !item.participantId);
   const seated = [...currentPlayers]
     .filter((item) => item.active && item.seat !== null)
     .sort((a, b) => a.seat! - b.seat!);
@@ -1192,7 +1193,7 @@ function ManageView({
           const index = seated.findIndex((item) => item.id === player.id);
           const isSeated = index >= 0 && player.active;
           const playerMember = room.members.find((item) => item.id === player.memberId)!;
-          const canControlSeat = room.me.isOwner || room.me.participantId === player.id;
+          const canControlSeat = room.me.isDealer || room.me.participantId === player.id;
           return (
             <div className="manage-player" key={player.id}>
               <div className="manage-player-info">
@@ -1207,7 +1208,7 @@ function ManageView({
               </div>
               {canControlSeat && (
                 <div className="seat-tools">
-                  {room.me.isOwner && isSeated && (
+                  {room.me.isDealer && isSeated && (
                     <>
                       <button
                         aria-label="上移"
@@ -1273,62 +1274,67 @@ function ManageView({
           );
         })}
       </section>
-      {room.me.isOwner && (
+      {room.me.isDealer && (room.me.isOwner || spectatorMembers.length > 0) && (
         <section className="card">
-          <h2>成员与房主</h2>
-          {room.members
-            .filter((item) => !item.participantId)
-            .map((item) => (
-              <div className="member-row" key={item.id}>
-                <span>{item.name} · 旁观</span>
-                <div className="member-actions">
+          <h2>{room.me.isOwner ? '成员与房主' : '旁观成员'}</h2>
+          {spectatorMembers.map((item) => (
+            <div className="member-row" key={item.id}>
+              <span>{item.name} · 旁观</span>
+              <div className="member-actions">
+                <button
+                  className="chip-button"
+                  disabled={busy || !betweenHands}
+                  onClick={() => void command({ type: 'seat-member', memberId: item.id })}
+                >
+                  入座为玩家
+                </button>
+                {room.me.isOwner && item.id !== room.ownerMemberId && (
                   <button
-                    className="chip-button"
-                    disabled={busy || !betweenHands}
-                    onClick={() => void command({ type: 'seat-member', memberId: item.id })}
+                    className="icon-danger"
+                    aria-label={`移除 ${item.name}`}
+                    disabled={busy}
+                    onClick={() => {
+                      if (window.confirm(`确认让 ${item.name} 离开房间？`))
+                        void command({ type: 'remove-member', memberId: item.id });
+                    }}
                   >
-                    入座为玩家
+                    <Trash2 size={17} />
                   </button>
-                  {item.id !== room.ownerMemberId && (
-                    <button
-                      className="icon-danger"
-                      aria-label={`移除 ${item.name}`}
-                      disabled={busy}
-                      onClick={() => {
-                        if (window.confirm(`确认让 ${item.name} 离开房间？`))
-                          void command({ type: 'remove-member', memberId: item.id });
-                      }}
-                    >
-                      <Trash2 size={17} />
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
-            ))}
-          <label>
-            转移房主给
-            <select value={ownerTarget} onChange={(event) => setOwnerTarget(event.target.value)}>
-              <option value="">选择成员</option>
-              {room.members
-                .filter((item) => item.id !== room.ownerMemberId)
-                .map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <button
-            className="secondary"
-            disabled={busy || !ownerTarget}
-            onClick={() => {
-              const target = room.members.find((item) => item.id === ownerTarget);
-              if (target && window.confirm(`确认把房主转移给 ${target.name}？`))
-                void command({ type: 'transfer-owner', memberId: ownerTarget });
-            }}
-          >
-            确认转移房主
-          </button>
+            </div>
+          ))}
+          {room.me.isOwner && (
+            <>
+              <label>
+                转移房主给
+                <select
+                  value={ownerTarget}
+                  onChange={(event) => setOwnerTarget(event.target.value)}
+                >
+                  <option value="">选择成员</option>
+                  {room.members
+                    .filter((item) => item.id !== room.ownerMemberId)
+                    .map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <button
+                className="secondary"
+                disabled={busy || !ownerTarget}
+                onClick={() => {
+                  const target = room.members.find((item) => item.id === ownerTarget);
+                  if (target && window.confirm(`确认把房主转移给 ${target.name}？`))
+                    void command({ type: 'transfer-owner', memberId: ownerTarget });
+                }}
+              >
+                确认转移房主
+              </button>
+            </>
+          )}
         </section>
       )}
       {room.me.isDealer && (

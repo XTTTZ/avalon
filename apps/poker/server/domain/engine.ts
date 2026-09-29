@@ -1213,12 +1213,12 @@ export function applyCommand(
       break;
     }
     case 'seat-member': {
-      assertOwner(room, actor.id);
+      assertAdmin(room, actor.id);
       invalid(betweenHands(room), '请在两手之间安排入座');
       const target = room.members.find((item) => item.id === command.memberId && !item.removedAt);
       invalid(target, '成员不存在');
       invalid(!target.participantId, '该成员已有玩家账务');
-      invalid(activePlayerMembers(room).length < 10, '牌桌座位已满');
+      invalid(activeSeats(room).length < 10, '牌桌座位已满');
       before = snapshot(room);
       const participantId = randomUUID();
       const used = new Set(
@@ -1259,7 +1259,7 @@ export function applyCommand(
       break;
     }
     case 'reorder': {
-      assertOwner(room, actor.id);
+      assertAdmin(room, actor.id);
       invalid(betweenHands(room), '请在两手之间调整座位');
       const seated = room.participants.filter((item) => item.active && item.seat !== null);
       invalid(
@@ -1270,13 +1270,13 @@ export function applyCommand(
       );
       before = snapshot(room);
       command.participantIds.forEach((id, seat) => (participant(room, id).seat = seat));
-      primary = event(room, actor.id, 'SEATS_CHANGED', '房主调整了座位顺序', {}, now);
+      primary = event(room, actor.id, 'SEATS_CHANGED', '荷官调整了座位顺序', {}, now);
       break;
     }
     case 'set-participant-active': {
       invalid(betweenHands(room), '请在两手之间调整入座状态');
       const target = participant(room, command.participantId);
-      if (actor.participantId !== target.id) assertOwner(room, actor.id);
+      if (actor.participantId !== target.id) assertAdmin(room, actor.id);
       invalid(
         room.members.some((item) => item.id === target.memberId && !item.removedAt),
         '该玩家已离开房间',
