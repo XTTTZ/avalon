@@ -352,6 +352,10 @@ function PlayerCard({
       <div className="player-position-slot">
         <PositionBadges room={room} id={player.id} />
       </div>
+      <div className="player-stack" aria-label={`后手 ${amount(player.stack)}`}>
+        <span>后手</span>
+        <strong>{amount(player.stack)}</strong>
+      </div>
       <div className="player-state-slot">
         {status && (
           <span
@@ -1025,15 +1029,19 @@ function TableView({
             const distance = Math.hypot(50 - x, 50 - y) || 1;
             const towardX = (50 - x) / distance;
             const towardY = (50 - y) / distance;
+            const perpendicularX = -towardY;
+            const perpendicularY = towardX;
+            const cardDistance = 46 + Math.abs(towardX) * 8;
+            const chipDistance = 62;
             const seatStyle = {
               left: `${x}%`,
               top: `${y}%`,
-              '--card-x': `${towardX * 54}px`,
-              '--card-y': `${towardY * 46}px`,
-              '--chip-x': `${towardX * 88}px`,
-              '--chip-y': `${towardY * 72}px`,
-              '--muck-x': `${towardX * 132}px`,
-              '--muck-y': `${towardY * 108}px`,
+              '--card-x': `${towardX * cardDistance + perpendicularX * 14}px`,
+              '--card-y': `${towardY * cardDistance + perpendicularY * 14}px`,
+              '--chip-x': `${towardX * chipDistance - perpendicularX * 15}px`,
+              '--chip-y': `${towardY * chipDistance - perpendicularY * 15}px`,
+              '--muck-x': `${towardX * 126}px`,
+              '--muck-y': `${towardY * 126}px`,
             } as CSSProperties;
             return (
               <div className="seat-node" key={player.id} style={seatStyle}>
