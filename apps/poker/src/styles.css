@@ -325,25 +325,23 @@ select {
 }
 .poker-table {
   position: relative;
-  min-height: clamp(420px, 118vw, 560px);
+  width: min(100%, 560px);
+  aspect-ratio: 1;
+  margin-inline: auto;
+  container-type: inline-size;
   overflow: visible;
   border-radius: 26px;
-  background: radial-gradient(circle at 50% 48%, rgba(32, 91, 66, 0.08), transparent 58%);
-}
-.poker-table.crowded {
-  min-height: clamp(450px, 128vw, 600px);
-}
-.poker-table.dense {
-  min-height: clamp(485px, 138vw, 640px);
-}
-.poker-table.many {
-  min-height: clamp(620px, 180vw, 760px);
+  background: radial-gradient(ellipse at 50% 50%, rgba(32, 91, 66, 0.08), transparent 62%);
 }
 .table-felt {
   position: absolute;
-  inset: 12% 12%;
-  border: 8px solid #604633;
-  border-radius: 48%;
+  left: 50%;
+  top: 50%;
+  width: 71%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border: 7px solid #604633;
+  border-radius: 24%;
   background:
     radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.1), transparent 42%), #1d654a;
   box-shadow:
@@ -387,11 +385,11 @@ select {
   line-height: 1;
 }
 .playing-card b {
-  font-size: 14px;
+  font-size: 16px;
 }
 .playing-card i {
   justify-self: end;
-  font-size: 16px;
+  font-size: 19px;
   font-style: normal;
 }
 .playing-card.red {
@@ -404,10 +402,10 @@ select {
   border-radius: 4px;
 }
 .playing-card.compact b {
-  font-size: 10px;
+  font-size: 12px;
 }
 .playing-card.compact i {
-  font-size: 11px;
+  font-size: 14px;
 }
 .playing-card.placeholder {
   border-color: rgba(255, 255, 255, 0.2);
@@ -432,7 +430,7 @@ select {
   margin: 1px 0;
 }
 .poker-table.online-mode .center-pot strong {
-  font-size: clamp(22px, 7vw, 32px);
+  font-size: clamp(19px, 6vw, 27px);
 }
 .center-pot {
   display: grid;
@@ -445,7 +443,7 @@ select {
 }
 .center-pot strong {
   font:
-    800 clamp(25px, 8vw, 38px) / 1.05 ui-monospace,
+    800 clamp(22px, 7vw, 32px) / 1.05 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
@@ -513,8 +511,8 @@ select {
 .seat-node {
   position: absolute;
   z-index: 3;
-  width: clamp(88px, 25vw, 112px);
-  height: 64px;
+  width: clamp(58px, 16vw, 64px);
+  height: 56px;
   transform: translate(-50%, -50%);
 }
 .table-seat {
@@ -526,14 +524,14 @@ select {
   grid-template-rows: auto auto 1fr;
 }
 .poker-table.crowded .seat-node {
-  width: clamp(80px, 22vw, 98px);
-  height: 60px;
+  width: clamp(58px, 16vw, 64px);
+  height: 56px;
 }
 .poker-table.crowded .table-seat {
   padding: 4px;
 }
 .poker-table.dense .seat-node {
-  width: clamp(70px, 19vw, 84px);
+  width: clamp(58px, 16vw, 64px);
   height: 56px;
 }
 .poker-table.dense .table-seat {
@@ -594,7 +592,7 @@ select {
   min-width: 0;
 }
 .poker-table.dense .player-stack strong {
-  font-size: 10px;
+  font-size: 9px;
 }
 .seat-number {
   width: 18px;
@@ -637,6 +635,10 @@ select {
   color: #4c5c54;
   font-size: 8px;
 }
+.poker-table.dense .position-badges b {
+  padding: 1px 2px;
+  font-size: 7px;
+}
 .player-position-slot {
   min-width: 0;
   min-height: 14px;
@@ -677,20 +679,20 @@ select {
   border-radius: 5px;
 }
 .seat-hole-cards .playing-card.compact b {
-  font-size: 12px;
+  font-size: 14px;
 }
 .seat-hole-cards .playing-card.compact i {
-  font-size: 14px;
+  font-size: 17px;
 }
 .poker-table.dense .seat-hole-cards .playing-card.compact {
   width: 28px;
   height: 39px;
 }
 .poker-table.dense .seat-hole-cards .playing-card.compact b {
-  font-size: 11px;
+  font-size: 13px;
 }
 .poker-table.dense .seat-hole-cards .playing-card.compact i {
-  font-size: 13px;
+  font-size: 16px;
 }
 .seat-hole-cards .playing-card + .playing-card {
   margin-left: 0;
@@ -701,9 +703,9 @@ select {
 }
 .seat-bet {
   z-index: 4;
-  min-width: 45px;
+  min-width: 42px;
   min-height: 24px;
-  padding: 3px 6px 3px 4px;
+  padding: 3px 5px;
   border: 1px solid rgba(119, 80, 26, 0.25);
   border-radius: 999px;
   color: #70450d;
@@ -712,7 +714,6 @@ select {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
   transform: translate(calc(-50% + var(--chip-x, 0px)), calc(-50% + var(--chip-y, 0px)));
   animation: chips-to-table 0.36s cubic-bezier(0.2, 0.75, 0.3, 1.15);
 }
@@ -723,31 +724,13 @@ select {
     Menlo,
     monospace;
 }
-.chip-stack {
-  position: relative;
-  width: 12px;
-  height: 13px;
-  flex: 0 0 auto;
+.poker-table.dense .seat-bet {
+  min-width: 38px;
+  min-height: 22px;
+  padding: 3px 4px;
 }
-.chip-stack i {
-  position: absolute;
-  left: 1px;
-  width: 11px;
-  height: 5px;
-  border: 1px solid #f2de9f;
-  border-radius: 50%;
-  background: #b75b3c;
-}
-.chip-stack i:nth-child(1) {
-  bottom: 0;
-}
-.chip-stack i:nth-child(2) {
-  bottom: 4px;
-  background: #326f59;
-}
-.chip-stack i:nth-child(3) {
-  bottom: 8px;
-  background: #d09b2d;
+.poker-table.dense .seat-bet strong {
+  font-size: 9px;
 }
 .status {
   padding: 1px 4px;
@@ -1617,12 +1600,6 @@ select {
 }
 
 @media (min-width: 620px) {
-  .poker-table {
-    min-height: 610px;
-  }
-  .poker-table.dense {
-    min-height: 700px;
-  }
   .summary-table dl {
     grid-template-columns: repeat(6, 1fr);
   }
@@ -1633,24 +1610,11 @@ select {
     padding-top: 8px;
     gap: 8px;
   }
-  .poker-table.action-compact:not(.many) {
-    min-height: clamp(350px, 96vw, 420px);
-  }
-  .poker-table.action-compact.crowded:not(.many) {
-    min-height: clamp(370px, 100vw, 440px);
-  }
-  .poker-table.action-compact.dense:not(.many) {
-    min-height: clamp(390px, 104vw, 460px);
-  }
   .poker-table.action-compact:not(.many) .seat-node {
     height: 54px;
   }
   .poker-table.action-compact:not(.many) .table-seat {
     padding: 4px;
-  }
-  .poker-table.action-compact:not(.many) .player-position-slot {
-    top: 4px;
-    right: 4px;
   }
   .poker-table.action-compact:not(.many) .player-state-slot {
     height: 13px;
@@ -1725,7 +1689,7 @@ select {
     height: 30px;
   }
   .seat-node {
-    width: 86px;
+    width: 54px;
   }
   .poker-table.crowded .seat-node,
   .poker-table.dense .seat-node {

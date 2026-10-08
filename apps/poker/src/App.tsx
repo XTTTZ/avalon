@@ -38,6 +38,15 @@ const streetName = {
   SHOWDOWN: 'Showdown',
 };
 
+function squarePerimeterPoint(progress: number, halfSize: number) {
+  const distance = (((progress % 1) + 1) % 1) * 8;
+  if (distance < 1) return { x: -distance * halfSize, y: halfSize };
+  if (distance < 3) return { x: -halfSize, y: (2 - distance) * halfSize };
+  if (distance < 5) return { x: (distance - 4) * halfSize, y: -halfSize };
+  if (distance < 7) return { x: halfSize, y: (distance - 6) * halfSize };
+  return { x: (8 - distance) * halfSize, y: halfSize };
+}
+
 const suitInfo: Record<string, { symbol: string; name: string }> = {
   s: { symbol: '♠', name: '黑桃' },
   h: { symbol: '♥', name: '红桃' },
@@ -404,12 +413,6 @@ function SeatBet({ room, player }: { room: RoomView; player: Participant }) {
       key={`${hand.id}-${hand.street}-${player.id}-${committed}`}
       aria-label={`${player.name} 本街下注 ${amount(committed)}`}
     >
-      <span className="chip-stack" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-      </span>
-      <Coins size={12} />
       <strong>{amount(committed)}</strong>
     </div>
   );
@@ -1006,47 +1009,36 @@ function TableView({
             </div>
           </div>
           {arranged.map((player, index) => {
-            const angle = Math.PI / 2 + (index * Math.PI * 2) / Math.max(arranged.length, 1);
-            const xRadius =
-              compactTable && arranged.length >= 7
-                ? 40
-                : arranged.length >= 7
-                  ? 42
-                  : arranged.length >= 5
-                    ? 39
-                    : 35;
-            const yRadius = online
-              ? compactTable
-                ? 32
-                : arranged.length >= 7
-                  ? 34
-                  : 35
-              : compactTable
-                ? arranged.length >= 7
-                  ? 39
-                  : 38
-                : arranged.length >= 7
-                  ? 42
-                  : arranged.length >= 5
-                    ? 41
-                    : 39;
-            const x = 50 + Math.cos(angle) * xRadius;
-            const y = 50 + Math.sin(angle) * yRadius;
-            const distance = Math.hypot(50 - x, 50 - y) || 1;
-            const towardX = (50 - x) / distance;
-            const towardY = (50 - y) / distance;
-            const nearVerticalEdge = Math.abs(towardX) < 0.3;
-            const chipX = towardX * 58 + (nearVerticalEdge ? 42 : 0);
-            const chipY = towardY * (nearVerticalEdge ? 40 : 52) - 14;
+            const count = Math.max(arranged.length, 1);
+            const progress = index / count;
+            const seatPoint = squarePerimeterPoint(progress, 44.5);
+            const cardPoint = squarePerimeterPoint(progress, 27);
+            const chipHalfSize =
+              count <= 2
+                ? 17.5
+                : count === 3
+                  ? 13
+                  : count <= 5
+                    ? 12
+                    : count === 6
+                      ? 17.5
+                      : count === 8
+                        ? 18.5
+                        : 13.5;
+            const chipPhase = count === 6 || count === 8 ? 0.5 : count === 9 ? 0.25 : 0;
+            const chipProgress = progress + chipPhase / count;
+            const chipPoint = squarePerimeterPoint(chipProgress, chipHalfSize);
+            const x = 50 + seatPoint.x;
+            const y = 50 + seatPoint.y;
             const seatStyle = {
               left: `${x}%`,
               top: `${y}%`,
-              '--card-x': '0px',
-              '--card-y': arranged.length >= 7 ? '-50px' : '-54px',
-              '--chip-x': `${chipX}px`,
-              '--chip-y': `${chipY}px`,
-              '--muck-x': `${towardX * 126}px`,
-              '--muck-y': `${towardY * 126}px`,
+              '--card-x': `${cardPoint.x - seatPoint.x}cqw`,
+              '--card-y': `${cardPoint.y - seatPoint.y}cqw`,
+              '--chip-x': `${chipPoint.x - seatPoint.x}cqw`,
+              '--chip-y': `${chipPoint.y - seatPoint.y}cqw`,
+              '--muck-x': `${-seatPoint.x}cqw`,
+              '--muck-y': `${-seatPoint.y}cqw`,
             } as CSSProperties;
             return (
               <div className="seat-node" key={player.id} style={seatStyle}>
