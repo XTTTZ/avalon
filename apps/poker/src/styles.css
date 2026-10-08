@@ -668,8 +668,9 @@ select {
   pointer-events: none;
 }
 .seat-hole-cards {
-  z-index: 3;
+  z-index: 4;
   display: flex;
+  gap: 3px;
   transform: translate(calc(-50% + var(--card-x, 0px)), calc(-50% + var(--card-y, 0px)));
   transition: opacity 0.18s ease;
 }
@@ -696,11 +697,8 @@ select {
   font-size: 13px;
 }
 .seat-hole-cards .playing-card + .playing-card {
-  margin-left: -10px;
-  transform: rotate(5deg) translateY(1px);
-}
-.seat-hole-cards .playing-card:first-child {
-  transform: rotate(-5deg);
+  margin-left: 0;
+  transform: none;
 }
 .seat-hole-cards.folded {
   animation: muck-cards 0.55s cubic-bezier(0.3, 0.75, 0.25, 1) forwards;
@@ -1557,7 +1555,7 @@ select {
   to {
     opacity: 0;
     transform: translate(calc(-50% + var(--muck-x, 0px)), calc(-50% + var(--muck-y, 0px)))
-      rotate(18deg) scale(0.76);
+      scale(0.76);
   }
 }
 .spinning {

@@ -1031,15 +1031,14 @@ function TableView({
             const towardY = (50 - y) / distance;
             const perpendicularX = -towardY;
             const perpendicularY = towardX;
-            const cardDistance = 46 + Math.abs(towardX) * 8;
-            const chipDistance = 62;
+            const tableItemDistance = 60 + Math.abs(towardX) * 28;
             const seatStyle = {
               left: `${x}%`,
               top: `${y}%`,
-              '--card-x': `${towardX * cardDistance + perpendicularX * 14}px`,
-              '--card-y': `${towardY * cardDistance + perpendicularY * 14}px`,
-              '--chip-x': `${towardX * chipDistance - perpendicularX * 15}px`,
-              '--chip-y': `${towardY * chipDistance - perpendicularY * 15}px`,
+              '--card-x': `${towardX * tableItemDistance + perpendicularX * 32}px`,
+              '--card-y': `${towardY * tableItemDistance + perpendicularY * 32}px`,
+              '--chip-x': `${towardX * tableItemDistance - perpendicularX * 32}px`,
+              '--chip-y': `${towardY * tableItemDistance - perpendicularY * 32}px`,
               '--muck-x': `${towardX * 126}px`,
               '--muck-y': `${towardY * 126}px`,
             } as CSSProperties;
