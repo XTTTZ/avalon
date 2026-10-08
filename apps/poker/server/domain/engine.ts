@@ -13,6 +13,7 @@ import {
   type RoomState,
   type RoomView,
   type SettlementChoice,
+  type ShowdownHand,
   type Street,
   type UndoSnapshot,
 } from '../../shared/types.js';
@@ -33,7 +34,9 @@ function invalid(condition: unknown, message: string): asserts condition {
 
 export function validateConfig(config: GameConfig): GameConfig {
   invalid(config && typeof config === 'object', '牌局设置无效');
+  invalid(config.mode === undefined || ['chips', 'online'].includes(config.mode), '请选择有效模式');
   invalid(['standard', 'short-deck'].includes(config.variant), '请选择有效牌型');
+  invalid(config.mode !== 'online' || config.variant === 'standard', '线上模式仅支持标准德州扑克');
   invalid(integer(config.chipUnit) && config.chipUnit > 0, '最小筹码单位无效');
   invalid(
     integer(config.initialStack) &&
@@ -69,8 +72,10 @@ export function validateConfig(config: GameConfig): GameConfig {
       config.defaultRefill % config.chipUnit === 0,
     '默认补码无效',
   );
-  return copy(config);
+  return { ...copy(config), mode: config.mode ?? 'chips' };
 }
+
+const isOnline = (room: RoomState) => room.config.mode === 'online';
 
 function event(
   room: RoomState,
@@ -1088,16 +1093,19 @@ export function applyCommand(
     }
     case 'confirm-street':
       assertAdmin(room, actor.id);
+      invalid(!isOnline(room), '线上模式由系统自动发公共牌');
       before = snapshot(room);
       primary = confirmStreet(room, actor.id, now);
       break;
     case 'save-settlement':
       assertAdmin(room, actor.id);
+      invalid(!isOnline(room), '线上模式由系统自动结算');
       invalid(room.hand?.phase === 'SHOWDOWN', '当前不能编辑结算');
       room.hand.settlementDraft = normalizedChoices(room.hand, command.pots);
       break;
     case 'settle':
       assertAdmin(room, actor.id);
+      invalid(!isOnline(room), '线上模式由系统自动结算');
       before = snapshot(room);
       primary = settle(room, actor.id, command.pots, now);
       break;
@@ -1426,7 +1434,14 @@ export function applyCommand(
       assertOwner(room, actor.id);
       invalid(betweenHands(room), '请在两手之间修改规则');
       before = snapshot(room);
-      room.config = validateConfig(command.config);
+      {
+        const nextConfig = validateConfig(command.config);
+        invalid(
+          (nextConfig.mode ?? 'chips') === (room.config.mode ?? 'chips'),
+          '房间创建后不能切换牌局模式',
+        );
+        room.config = nextConfig;
+      }
       room.blindLevel = Math.min(room.blindLevel, room.config.blindLevels.length - 1);
       primary = event(room, actor.id, 'RULES_CHANGED', '房主更新了牌局规则', {}, now);
       break;
@@ -1448,7 +1463,43 @@ export function touchRoomActivity(source: RoomState, userId: string, now = Date.
   return room;
 }
 
-export function projectRoom(room: RoomState, userId: string): RoomView {
+export function advanceOnlineStreet(
+  source: RoomState,
+  actorMemberId: string,
+  communityCards: string[],
+  now = Date.now(),
+) {
+  const room = copy(source);
+  invalid(isOnline(room), '当前房间不是线上模式');
+  invalid(room.hand?.phase === 'AWAITING_STREET_CONFIRMATION', '当前无需自动发牌');
+  room.hand.communityCards = [...communityCards];
+  const confirmed = confirmStreet(room, actorMemberId, now);
+  confirmed.detail =
+    room.hand.street === 'SHOWDOWN'
+      ? '系统已发完公共牌，进入 Showdown'
+      : `系统已发 ${room.hand.street}`;
+  assertChipConservation(room);
+  return finish(room, now);
+}
+
+export function settleOnlineHand(
+  source: RoomState,
+  actorMemberId: string,
+  choices: SettlementChoice[],
+  showdownHands: ShowdownHand[],
+  now = Date.now(),
+) {
+  const room = copy(source);
+  invalid(isOnline(room), '当前房间不是线上模式');
+  invalid(room.hand?.phase === 'SHOWDOWN', '当前不能自动结算');
+  room.hand.showdownHands = copy(showdownHands);
+  settle(room, actorMemberId, choices, now);
+  moveBustedPlayersToSpectators(room, actorMemberId, now);
+  assertChipConservation(room);
+  return finish(room, now);
+}
+
+export function projectRoom(room: RoomState, userId: string, holeCards: string[] = []): RoomView {
   const self = member(room, userId);
   const { undo: _undo, ledger: _ledger, ...publicRoom } = copy(room);
   return {
@@ -1465,5 +1516,13 @@ export function projectRoom(room: RoomState, userId: string): RoomView {
       isDealer: room.ownerMemberId === self.id || room.dealerMemberId === self.id,
     },
     legalActions: self.participantId ? legalActions(room, self.participantId) : null,
+    ...(isOnline(room)
+      ? {
+          online: {
+            holeCards: [...holeCards],
+            communityCards: [...(room.hand?.communityCards ?? [])],
+          },
+        }
+      : {}),
   };
 }

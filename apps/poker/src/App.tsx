@@ -40,6 +40,41 @@ const streetName = {
   SHOWDOWN: 'Showdown',
 };
 
+const suitInfo: Record<string, { symbol: string; name: string }> = {
+  s: { symbol: '♠', name: '黑桃' },
+  h: { symbol: '♥', name: '红桃' },
+  d: { symbol: '♦', name: '方片' },
+  c: { symbol: '♣', name: '梅花' },
+};
+
+function PlayingCard({ code, compact = false }: { code?: string; compact?: boolean }) {
+  if (!code) return <span className={`playing-card placeholder ${compact ? 'compact' : ''}`} />;
+  const rank = code[0] === 'T' ? '10' : code[0];
+  const suit = suitInfo[code[1]];
+  const red = code[1] === 'h' || code[1] === 'd';
+  return (
+    <span
+      className={`playing-card ${red ? 'red' : ''} ${compact ? 'compact' : ''}`}
+      aria-label={`${suit?.name ?? ''}${rank}`}
+    >
+      <b>{rank}</b>
+      <i>{suit?.symbol}</i>
+    </span>
+  );
+}
+
+function CommunityCards({ room }: { room: RoomView }) {
+  if ((room.config.mode ?? 'chips') !== 'online' || !room.hand) return null;
+  const cards = room.online?.communityCards ?? room.hand.communityCards ?? [];
+  return (
+    <div className="community-cards" aria-label="公共牌">
+      {Array.from({ length: 5 }, (_, index) => (
+        <PlayingCard code={cards[index]} compact key={`board-${index}`} />
+      ))}
+    </div>
+  );
+}
+
 function Home({
   busy,
   create,
@@ -78,7 +113,7 @@ function Home({
         <div className="brand-mark">
           <Spade size={30} />
         </div>
-        <h1>Poker 数字筹码</h1>
+        <h1>Poker 德州扑克</h1>
       </section>
       <section className="card form-card">
         <div className="segmented">
@@ -100,6 +135,28 @@ function Home({
         </label>
         {mode === 'create' ? (
           <>
+            <div className="game-mode-picker">
+              <span>牌局模式</span>
+              <div className="segmented compact">
+                <button
+                  className={(config.mode ?? 'chips') === 'chips' ? 'active' : ''}
+                  onClick={() => setConfig({ ...config, mode: 'chips' })}
+                >
+                  电子筹码
+                </button>
+                <button
+                  className={config.mode === 'online' ? 'active' : ''}
+                  onClick={() => setConfig({ ...config, mode: 'online', variant: 'standard' })}
+                >
+                  线上发牌
+                </button>
+              </div>
+              <small>
+                {config.mode === 'online'
+                  ? '系统发牌、亮公共牌并按牌型自动结算'
+                  : '配合实体扑克牌，只记录筹码和下注'}
+              </small>
+            </div>
             <label>
               初始筹码
               <input
@@ -227,7 +284,7 @@ function Home({
           </>
         )}
       </section>
-      <p className="footnote">筹码与下注公开 · 玩家操作自己 · 换街和结算由荷官确认</p>
+      <p className="footnote">下注与筹码公开 · 玩家只操作自己的行动</p>
     </main>
   );
 }
@@ -653,6 +710,70 @@ function Showdown({
   );
 }
 
+function OnlineHoleCards({ room }: { room: RoomView }) {
+  if ((room.config.mode ?? 'chips') !== 'online' || !room.hand) return null;
+  if (['SETTLED', 'VOIDED'].includes(room.hand.phase)) return null;
+  const cards = room.online?.holeCards ?? [];
+  if (cards.length !== 2) return null;
+  const result = room.hand.showdownHands?.find(
+    (item) => item.participantId === room.me.participantId,
+  );
+  return (
+    <section className="hole-card-bar" aria-label="你的底牌">
+      <span>
+        <small>你的手牌</small>
+        {result && <b>{result.label}</b>}
+      </span>
+      <div>
+        {cards.map((card) => (
+          <PlayingCard code={card} key={card} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function OnlineShowdown({ room }: { room: RoomView }) {
+  const hands = room.hand?.showdownHands ?? [];
+  if ((room.config.mode ?? 'chips') !== 'online' || hands.length === 0) return null;
+  const winners = new Set(
+    room.hand!.settlementDraft.flatMap((choice) =>
+      (choice.runs?.length ? choice.runs : [{ winnerIds: choice.winnerIds ?? [] }]).flatMap(
+        (run) => run.winnerIds,
+      ),
+    ),
+  );
+  return (
+    <section className="card online-showdown">
+      <div>
+        <p className="eyebrow">Showdown</p>
+        <h2>系统已自动结算</h2>
+      </div>
+      <div className="revealed-hands">
+        {hands.map((hand) => {
+          const player = room.participants.find((item) => item.id === hand.participantId);
+          return (
+            <article
+              className={winners.has(hand.participantId) ? 'winner' : ''}
+              key={hand.participantId}
+            >
+              <span>
+                <strong>{player?.name ?? '玩家'}</strong>
+                <small>{hand.label}</small>
+              </span>
+              <div>
+                {hand.cards.map((card) => (
+                  <PlayingCard code={card} compact key={card} />
+                ))}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function PotSummary({ room }: { room: RoomView }) {
   const hand = room.hand;
   const hasSidePots = (hand?.pots.length ?? 0) > 1;
@@ -668,6 +789,7 @@ function PotSummary({ room }: { room: RoomView }) {
     <>
       <p className="eyebrow">{hand ? `第 ${hand.number} 手` : '牌桌准备'}</p>
       <h2>{hand ? streetName[hand.street] : '等待开局'}</h2>
+      <CommunityCards room={room} />
       <div className="center-pot">
         <span>底池</span>
         <strong>{amount(total)}</strong>
@@ -686,7 +808,13 @@ function PotSummary({ room }: { room: RoomView }) {
                 </span>
               </>
             ) : (
-              <span>{hand.phase === 'SETTLED' ? '已结算' : '等待荷官'}</span>
+              <span>
+                {hand.phase === 'SETTLED'
+                  ? '已结算'
+                  : (room.config.mode ?? 'chips') === 'online'
+                    ? '系统处理中'
+                    : '等待荷官'}
+              </span>
             )}
           </div>
           {(hasSidePots || hand.uncalled) && (
@@ -788,6 +916,7 @@ function TableView({
   const arranged =
     selfIndex > 0 ? [...seated.slice(selfIndex), ...seated.slice(0, selfIndex)] : seated;
   const hand = room.hand;
+  const online = (room.config.mode ?? 'chips') === 'online';
   const compactTable = Boolean(room.legalActions);
   const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
   const changeLayout = (next: 'table' | 'list') => {
@@ -809,7 +938,7 @@ function TableView({
       </div>
       {layout === 'table' ? (
         <section
-          className={`poker-table ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
+          className={`poker-table ${online ? 'online-mode' : ''} ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
           aria-label="牌桌与玩家座位"
         >
           <div className="table-felt">
@@ -873,8 +1002,10 @@ function TableView({
           onClose={() => setSelectedPlayerId(null)}
         />
       )}
-      <DealerPrompt room={room} busy={busy} command={command} />
-      <Showdown room={room} busy={busy} command={command} />
+      <OnlineHoleCards room={room} />
+      <OnlineShowdown room={room} />
+      {!online && <DealerPrompt room={room} busy={busy} command={command} />}
+      {!online && <Showdown room={room} busy={busy} command={command} />}
       {(!hand || ['SETTLED', 'VOIDED'].includes(hand.phase)) && (
         <StartPanel room={room} busy={busy} command={command} />
       )}
@@ -939,7 +1070,7 @@ function StartPanel({
           })
         }
       >
-        开始下一手并扣盲
+        {(room.config.mode ?? 'chips') === 'online' ? '开始下一手并发牌' : '开始下一手并扣盲'}
       </button>
     </section>
   );
@@ -1038,7 +1169,7 @@ function ManageView({
 }) {
   const [reason, setReason] = useState('线下筹码核对');
   const [correctionAmount, setCorrectionAmount] = useState(room.config.chipUnit);
-  const [voidReason, setVoidReason] = useState('线下发牌或操作有误');
+  const [voidReason, setVoidReason] = useState('发牌或操作有误');
   const [ownerTarget, setOwnerTarget] = useState('');
   const plannedBlinds = room.nextBlinds ?? room.config.blindLevels[room.blindLevel];
   const [nextSmallBlind, setNextSmallBlind] = useState(plannedBlinds.smallBlind);
@@ -1419,7 +1550,10 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
     <main className="shell room-shell">
       <header className="room-header">
         <div>
-          <p className="eyebrow">房间 {room.code}</p>
+          <p className="eyebrow">
+            房间 {room.code} ·{' '}
+            {(room.config.mode ?? 'chips') === 'online' ? '线上发牌' : '电子筹码'}
+          </p>
           <h1>
             <Spade size={24} /> Poker
           </h1>

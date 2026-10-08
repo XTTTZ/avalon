@@ -1,4 +1,5 @@
 export type Variant = 'standard' | 'short-deck';
+export type GameMode = 'chips' | 'online';
 export type Street = 'PREFLOP' | 'FLOP' | 'TURN' | 'RIVER' | 'SHOWDOWN';
 export type HandPhase =
   'BETTING' | 'AWAITING_STREET_CONFIRMATION' | 'SHOWDOWN' | 'SETTLED' | 'VOIDED';
@@ -10,6 +11,7 @@ export interface BlindLevel {
 }
 
 export interface GameConfig {
+  mode?: GameMode;
   variant: Variant;
   initialStack: number;
   chipUnit: number;
@@ -72,6 +74,12 @@ export interface SettlementChoice {
   winnerIds?: string[];
 }
 
+export interface ShowdownHand {
+  participantId: string;
+  cards: string[];
+  label: string;
+}
+
 export interface HandState {
   id: string;
   number: number;
@@ -91,6 +99,8 @@ export interface HandState {
   pots: Pot[];
   uncalled: { participantId: string; amount: number } | null;
   settlementDraft: SettlementChoice[];
+  communityCards?: string[];
+  showdownHands?: ShowdownHand[];
   startedAt: number;
   settledAt?: number;
   revision: number;
@@ -207,6 +217,10 @@ export interface RoomView extends Omit<RoomState, 'undo' | 'ledger' | 'members'>
     isDealer: boolean;
   };
   legalActions: LegalActions | null;
+  online?: {
+    holeCards: string[];
+    communityCards: string[];
+  };
 }
 
 export type PokerCommand =
@@ -267,6 +281,7 @@ export interface Session {
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
+  mode: 'chips',
   variant: 'standard',
   initialStack: 2000,
   chipUnit: 1,

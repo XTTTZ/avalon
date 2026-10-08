@@ -121,6 +121,18 @@ svg {
   display: grid;
   gap: 15px;
 }
+.game-mode-picker {
+  display: grid;
+  gap: 7px;
+  color: #415149;
+  font-size: 14px;
+  font-weight: 650;
+}
+.game-mode-picker small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
 label {
   display: grid;
   gap: 7px;
@@ -352,6 +364,65 @@ select {
 }
 .table-center .eyebrow {
   color: #bce0ce;
+}
+.community-cards {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.playing-card {
+  width: 38px;
+  height: 52px;
+  padding: 4px;
+  border: 1px solid #cfd7d2;
+  border-radius: 6px;
+  color: #19231f;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(11, 31, 22, 0.16);
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1;
+}
+.playing-card b {
+  font-size: 14px;
+}
+.playing-card i {
+  justify-self: end;
+  font-size: 16px;
+  font-style: normal;
+}
+.playing-card.red {
+  color: #bd3131;
+}
+.playing-card.compact {
+  width: 25px;
+  height: 34px;
+  padding: 2px 3px;
+  border-radius: 4px;
+}
+.playing-card.compact b {
+  font-size: 10px;
+}
+.playing-card.compact i {
+  font-size: 11px;
+}
+.playing-card.placeholder {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(7, 48, 32, 0.3);
+  box-shadow: none;
+}
+.poker-table.online-mode .table-center {
+  inset: 6% 7%;
+  gap: 3px;
+}
+.poker-table.online-mode .center-pot {
+  margin: 1px 0;
+}
+.poker-table.online-mode .center-pot strong {
+  font-size: clamp(22px, 7vw, 32px);
 }
 .center-pot {
   display: grid;
@@ -605,6 +676,10 @@ select {
   grid-column: 1 / -1;
   margin-top: 4px;
 }
+.list-pot-card .community-cards {
+  grid-column: 1 / -1;
+  margin: 3px 0;
+}
 .list-pot-card .center-pots {
   grid-column: 1 / -1;
   width: min(100%, 300px);
@@ -813,6 +888,75 @@ select {
   display: grid;
   justify-items: center;
   gap: 6px;
+}
+.hole-card-bar {
+  min-height: 66px;
+  padding: 7px 11px;
+  border: 1px solid #c8d8ce;
+  border-radius: 15px;
+  background: rgba(250, 253, 251, 0.98);
+  box-shadow: 0 6px 18px rgba(24, 55, 41, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.hole-card-bar > span {
+  display: grid;
+  gap: 3px;
+}
+.hole-card-bar small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.hole-card-bar > span b {
+  color: var(--forest);
+  font-size: 13px;
+}
+.hole-card-bar > div {
+  display: flex;
+  gap: 5px;
+}
+.online-showdown {
+  display: grid;
+  gap: 12px;
+}
+.revealed-hands {
+  display: grid;
+  gap: 6px;
+}
+.revealed-hands article {
+  min-height: 48px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f6f8f6;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.revealed-hands article.winner {
+  border-color: #d8b768;
+  background: #fff8e4;
+}
+.revealed-hands article > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.revealed-hands article strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.revealed-hands article small {
+  color: var(--muted);
+}
+.revealed-hands article > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 .prompt-stats {
   width: 100%;
