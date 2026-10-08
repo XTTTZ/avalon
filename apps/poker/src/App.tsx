@@ -353,15 +353,12 @@ function PlayerCard({
       onClick={onSelect}
     >
       <div className="player-title">
-        <span className="seat-number">{(player.seat ?? 0) + 1}</span>
         <strong title={player.name}>{player.name}</strong>
+        <PositionBadges room={room} id={player.id} />
       </div>
       <div className="player-card-meta">
         <div className="player-stack" aria-label={`剩余筹码 ${amount(player.stack)}`}>
           <strong>{amount(player.stack)}</strong>
-        </div>
-        <div className="player-position-slot">
-          <PositionBadges room={room} id={player.id} />
         </div>
       </div>
       <div className="player-state-slot">
@@ -539,7 +536,7 @@ function ActionBar({
               send(legal.actions.includes('raise') ? 'raise' : 'bet', Number(amountTo))
             }
           >
-            确认金额
+            确认
           </button>
         </div>
       )}
@@ -848,8 +845,9 @@ function PotSummary({ room }: { room: RoomView }) {
     : 0;
   return (
     <>
-      <p className="eyebrow">{hand ? `第 ${hand.number} 手` : '牌桌准备'}</p>
-      <h2>{hand ? streetName[hand.street] : '等待开局'}</h2>
+      <p className="table-phase">
+        {hand ? `第 ${hand.number} 手 · ${streetName[hand.street]}` : '牌桌准备 · 等待开局'}
+      </p>
       <CommunityCards room={room} />
       <div className="center-pot">
         <span>底池</span>
@@ -992,7 +990,7 @@ function TableView({
           className={layout === 'table' ? 'active' : ''}
           onClick={() => changeLayout('table')}
         >
-          实体桌
+          牌桌
         </button>
         <button className={layout === 'list' ? 'active' : ''} onClick={() => changeLayout('list')}>
           列表
@@ -1011,7 +1009,7 @@ function TableView({
           {arranged.map((player, index) => {
             const count = Math.max(arranged.length, 1);
             const progress = index / count;
-            const seatPoint = squarePerimeterPoint(progress, 44.5);
+            const seatPoint = squarePerimeterPoint(progress, 43);
             const cardPoint = squarePerimeterPoint(progress, 27);
             const chipHalfSize =
               count <= 2
@@ -1646,16 +1644,31 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
     <main className="shell room-shell">
       <header className="room-header">
         <div>
+          <h1>
+            <Spade size={20} /> 房间 {room.code}
+          </h1>
           <p className="eyebrow">
-            房间 {room.code} ·{' '}
             {(room.config.mode ?? 'chips') === 'online' ? '线上发牌' : '电子筹码'}
           </p>
-          <h1>
-            <Spade size={24} /> Poker
-          </h1>
         </div>
         <div className="header-actions">
-          <span className={`connection ${game.connection}`}>
+          <span
+            className={`connection ${game.connection}`}
+            aria-label={
+              game.connection === 'online'
+                ? '在线'
+                : game.connection === 'connecting'
+                  ? '连接中'
+                  : '离线'
+            }
+            title={
+              game.connection === 'online'
+                ? '在线'
+                : game.connection === 'connecting'
+                  ? '连接中'
+                  : '离线'
+            }
+          >
             {game.connection === 'online'
               ? '在线'
               : game.connection === 'connecting'
@@ -1663,10 +1676,10 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
                 : '离线'}
           </span>
           <button aria-label="邀请" onClick={() => setShowInvite(!showInvite)}>
-            <Copy size={20} />
+            <Copy size={18} />
           </button>
           <button aria-label="退出当前页面" onClick={game.leaveLocal}>
-            <LogOut size={20} />
+            <LogOut size={18} />
           </button>
         </div>
       </header>
