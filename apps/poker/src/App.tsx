@@ -47,7 +47,22 @@ const suitInfo: Record<string, { symbol: string; name: string }> = {
   c: { symbol: '♣', name: '梅花' },
 };
 
-function PlayingCard({ code, compact = false }: { code?: string; compact?: boolean }) {
+function PlayingCard({
+  code,
+  compact = false,
+  hidden = false,
+}: {
+  code?: string;
+  compact?: boolean;
+  hidden?: boolean;
+}) {
+  if (hidden)
+    return (
+      <span
+        className={`playing-card card-back ${compact ? 'compact' : ''}`}
+        aria-label="未公开底牌"
+      />
+    );
   if (!code) return <span className={`playing-card placeholder ${compact ? 'compact' : ''}`} />;
   const rank = code[0] === 'T' ? '10' : code[0];
   const suit = suitInfo[code[1]];
@@ -304,12 +319,10 @@ function PositionBadges({ room, id }: { room: RoomView; id: string }) {
 function PlayerCard({
   room,
   player,
-  style,
   onSelect,
 }: {
   room: RoomView;
   player: Participant;
-  style?: CSSProperties;
   onSelect: () => void;
 }) {
   const state = room.hand?.players.find((item) => item.participantId === player.id);
@@ -328,7 +341,6 @@ function PlayerCard({
     <button
       type="button"
       className={`player-card table-seat ${acting ? 'acting' : ''} ${state?.folded ? 'folded' : ''} ${self ? 'self' : ''}`}
-      style={style}
       aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}，本街下注 ${amount(state?.streetCommitted ?? 0)}`}
       aria-haspopup="dialog"
       onClick={onSelect}
@@ -340,10 +352,6 @@ function PlayerCard({
       <div className="player-position-slot">
         <PositionBadges room={room} id={player.id} />
       </div>
-      <div className="street-total" aria-label="本街下注">
-        <Coins size={12} />
-        <strong>{amount(state?.streetCommitted ?? 0)}</strong>
-      </div>
       <div className="player-state-slot">
         {status && (
           <span
@@ -354,6 +362,53 @@ function PlayerCard({
         )}
       </div>
     </button>
+  );
+}
+
+function SeatCards({ room, player }: { room: RoomView; player: Participant }) {
+  const hand = room.hand;
+  const state = hand?.players.find((item) => item.participantId === player.id);
+  if ((room.config.mode ?? 'chips') !== 'online' || !hand || !state) return null;
+  const showdown = hand.showdownHands?.find((item) => item.participantId === player.id);
+  const ownCards = room.me.participantId === player.id ? (room.online?.holeCards ?? []) : [];
+  const visibleCards = showdown?.cards ?? ownCards;
+  const hidden = visibleCards.length !== 2;
+  return (
+    <div
+      className={`seat-hole-cards ${state.folded ? 'folded' : ''}`}
+      key={`${hand.id}-${player.id}`}
+      aria-label={hidden ? `${player.name} 的底牌` : `${player.name} 的底牌已显示`}
+    >
+      {[0, 1].map((index) => (
+        <PlayingCard
+          code={visibleCards[index]}
+          compact
+          hidden={hidden}
+          key={`${player.id}-card-${index}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SeatBet({ room, player }: { room: RoomView; player: Participant }) {
+  const hand = room.hand;
+  const committed = hand?.players.find((item) => item.participantId === player.id)?.streetCommitted;
+  if (!hand || !committed) return null;
+  return (
+    <div
+      className="seat-bet"
+      key={`${hand.id}-${hand.street}-${player.id}-${committed}`}
+      aria-label={`${player.name} 本街下注 ${amount(committed)}`}
+    >
+      <span className="chip-stack" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <Coins size={12} />
+      <strong>{amount(committed)}</strong>
+    </div>
   );
 }
 
@@ -967,14 +1022,29 @@ function TableView({
                   : 39;
             const x = 50 + Math.cos(angle) * xRadius;
             const y = 50 + Math.sin(angle) * yRadius;
+            const distance = Math.hypot(50 - x, 50 - y) || 1;
+            const towardX = (50 - x) / distance;
+            const towardY = (50 - y) / distance;
+            const seatStyle = {
+              left: `${x}%`,
+              top: `${y}%`,
+              '--card-x': `${towardX * 54}px`,
+              '--card-y': `${towardY * 46}px`,
+              '--chip-x': `${towardX * 88}px`,
+              '--chip-y': `${towardY * 72}px`,
+              '--muck-x': `${towardX * 132}px`,
+              '--muck-y': `${towardY * 108}px`,
+            } as CSSProperties;
             return (
-              <PlayerCard
-                room={room}
-                player={player}
-                key={player.id}
-                style={{ left: `${x}%`, top: `${y}%` }}
-                onSelect={() => setSelectedPlayerId(player.id)}
-              />
+              <div className="seat-node" key={player.id} style={seatStyle}>
+                <PlayerCard
+                  room={room}
+                  player={player}
+                  onSelect={() => setSelectedPlayerId(player.id)}
+                />
+                <SeatCards room={room} player={player} />
+                <SeatBet room={room} player={player} />
+              </div>
             );
           })}
         </section>
@@ -1002,7 +1072,7 @@ function TableView({
           onClose={() => setSelectedPlayerId(null)}
         />
       )}
-      <OnlineHoleCards room={room} />
+      {layout === 'list' && <OnlineHoleCards room={room} />}
       <OnlineShowdown room={room} />
       {!online && <DealerPrompt room={room} busy={busy} command={command} />}
       {!online && <Showdown room={room} busy={busy} command={command} />}

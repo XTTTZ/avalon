@@ -414,6 +414,16 @@ select {
   background: rgba(7, 48, 32, 0.3);
   box-shadow: none;
 }
+.playing-card.card-back {
+  border-color: #f7eee1;
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.12) 25%, transparent 25%) 0 0 / 6px 6px,
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.12) 25%, transparent 25%) 0 0 / 6px 6px,
+    #8e382f;
+  box-shadow:
+    inset 0 0 0 2px #fff,
+    0 2px 5px rgba(11, 31, 22, 0.2);
+}
 .poker-table.online-mode .table-center {
   inset: 6% 7%;
   gap: 3px;
@@ -500,21 +510,33 @@ select {
     border-color 0.2s,
     box-shadow 0.2s;
 }
-.table-seat {
+.seat-node {
   position: absolute;
   z-index: 3;
   width: clamp(100px, 29vw, 132px);
   height: 82px;
   transform: translate(-50%, -50%);
 }
-.poker-table.crowded .table-seat {
+.table-seat {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+.poker-table.crowded .seat-node {
   width: clamp(86px, 25vw, 108px);
   height: 74px;
+}
+.poker-table.crowded .table-seat {
   padding: 6px;
 }
-.poker-table.dense .table-seat {
+.poker-table.dense .seat-node {
   width: clamp(76px, 22vw, 94px);
   height: 70px;
+}
+.poker-table.dense .table-seat {
   padding: 5px;
 }
 .player-card.acting {
@@ -598,30 +620,85 @@ select {
   min-width: 18px;
   min-height: 14px;
 }
-.street-total {
-  height: 27px;
-  margin-top: 3px;
+.player-state-slot {
+  height: 15px;
+  align-self: end;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  color: var(--forest);
 }
-.street-total strong {
+.seat-hole-cards,
+.seat-bet {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  pointer-events: none;
+}
+.seat-hole-cards {
+  z-index: 2;
+  display: flex;
+  transform: translate(calc(-50% + var(--card-x, 0px)), calc(-50% + var(--card-y, 0px)));
+  transition: opacity 0.18s ease;
+}
+.seat-hole-cards .playing-card + .playing-card {
+  margin-left: -8px;
+  transform: rotate(5deg) translateY(1px);
+}
+.seat-hole-cards .playing-card:first-child {
+  transform: rotate(-5deg);
+}
+.seat-hole-cards.folded {
+  animation: muck-cards 0.55s cubic-bezier(0.3, 0.75, 0.25, 1) forwards;
+}
+.seat-bet {
+  z-index: 4;
+  min-width: 45px;
+  min-height: 24px;
+  padding: 3px 6px 3px 4px;
+  border: 1px solid rgba(119, 80, 26, 0.25);
+  border-radius: 999px;
+  color: #70450d;
+  background: rgba(255, 246, 215, 0.96);
+  box-shadow: 0 3px 8px rgba(39, 30, 15, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  transform: translate(calc(-50% + var(--chip-x, 0px)), calc(-50% + var(--chip-y, 0px)));
+  animation: chips-to-table 0.36s cubic-bezier(0.2, 0.75, 0.3, 1.15);
+}
+.seat-bet strong {
   font:
-    800 18px/1 ui-monospace,
+    800 11px/1 ui-monospace,
     SFMono-Regular,
     Menlo,
     monospace;
 }
-.poker-table.dense .street-total strong {
-  font-size: 16px;
+.chip-stack {
+  position: relative;
+  width: 12px;
+  height: 13px;
+  flex: 0 0 auto;
 }
-.player-state-slot {
-  height: 15px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.chip-stack i {
+  position: absolute;
+  left: 1px;
+  width: 11px;
+  height: 5px;
+  border: 1px solid #f2de9f;
+  border-radius: 50%;
+  background: #b75b3c;
+}
+.chip-stack i:nth-child(1) {
+  bottom: 0;
+}
+.chip-stack i:nth-child(2) {
+  bottom: 4px;
+  background: #326f59;
+}
+.chip-stack i:nth-child(3) {
+  bottom: 8px;
+  background: #d09b2d;
 }
 .status {
   padding: 2px 5px;
@@ -1407,6 +1484,27 @@ select {
     transform: rotate(360deg);
   }
 }
+@keyframes chips-to-table {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.62);
+  }
+  to {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--chip-x, 0px)), calc(-50% + var(--chip-y, 0px))) scale(1);
+  }
+}
+@keyframes muck-cards {
+  from {
+    opacity: 1;
+    transform: translate(calc(-50% + var(--card-x, 0px)), calc(-50% + var(--card-y, 0px)));
+  }
+  to {
+    opacity: 0;
+    transform: translate(calc(-50% + var(--muck-x, 0px)), calc(-50% + var(--muck-y, 0px)))
+      rotate(18deg) scale(0.76);
+  }
+}
 .spinning {
   animation: spin 0.8s linear infinite;
 }
@@ -1459,20 +1557,15 @@ select {
   .poker-table.action-compact.dense:not(.many) {
     min-height: clamp(390px, 104vw, 460px);
   }
-  .poker-table.action-compact:not(.many) .table-seat {
+  .poker-table.action-compact:not(.many) .seat-node {
     height: 60px;
+  }
+  .poker-table.action-compact:not(.many) .table-seat {
     padding: 4px;
   }
   .poker-table.action-compact:not(.many) .player-position-slot {
     top: 4px;
     right: 4px;
-  }
-  .poker-table.action-compact:not(.many) .street-total {
-    height: 20px;
-    margin-top: 0;
-  }
-  .poker-table.action-compact:not(.many) .street-total strong {
-    font-size: 15px;
   }
   .poker-table.action-compact:not(.many) .player-state-slot {
     height: 13px;
@@ -1546,11 +1639,11 @@ select {
     width: 30px;
     height: 30px;
   }
-  .table-seat {
+  .seat-node {
     width: 94px;
   }
-  .poker-table.crowded .table-seat,
-  .poker-table.dense .table-seat {
+  .poker-table.crowded .seat-node,
+  .poker-table.dense .seat-node {
     width: 72px;
   }
   .list-player-row {
@@ -1564,5 +1657,16 @@ select {
   }
   .list-amount b {
     font-size: 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seat-bet,
+  .spinning {
+    animation: none;
+  }
+  .seat-hole-cards.folded {
+    opacity: 0;
+    animation: none;
   }
 }
