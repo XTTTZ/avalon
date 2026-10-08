@@ -1221,10 +1221,10 @@ export function applyCommand(
       break;
     }
     case 'seat-member': {
-      assertAdmin(room, actor.id);
       invalid(betweenHands(room), '请在两手之间安排入座');
       const target = room.members.find((item) => item.id === command.memberId && !item.removedAt);
       invalid(target, '成员不存在');
+      if (actor.id !== target.id) assertAdmin(room, actor.id);
       invalid(!target.participantId, '该成员已有玩家账务');
       invalid(activeSeats(room).length < 10, '牌桌座位已满');
       before = snapshot(room);
@@ -1281,6 +1281,34 @@ export function applyCommand(
       primary = event(room, actor.id, 'SEATS_CHANGED', '荷官调整了座位顺序', {}, now);
       break;
     }
+    case 'change-seat': {
+      invalid(betweenHands(room), '请在两手之间更换座位');
+      const target = participant(room, command.participantId);
+      if (actor.participantId !== target.id) assertAdmin(room, actor.id);
+      invalid(target.active && target.seat !== null, '请先加入牌桌再换座');
+      invalid(
+        Number.isSafeInteger(command.seat) && command.seat >= 0 && command.seat < 10,
+        '座位无效',
+      );
+      invalid(target.seat !== command.seat, '你已经在这个座位');
+      invalid(
+        !room.participants.some(
+          (item) => item.id !== target.id && item.active && item.seat === command.seat,
+        ),
+        '该座位已有玩家',
+      );
+      before = snapshot(room);
+      target.seat = command.seat;
+      primary = event(
+        room,
+        actor.id,
+        'SEATS_CHANGED',
+        `${target.name} 换到 ${command.seat + 1} 号位`,
+        { participantId: target.id },
+        now,
+      );
+      break;
+    }
     case 'set-participant-active': {
       invalid(betweenHands(room), '请在两手之间调整入座状态');
       const target = participant(room, command.participantId);
@@ -1290,7 +1318,7 @@ export function applyCommand(
         '该玩家已离开房间',
       );
       if (command.active && !target.active) {
-        invalid(target.stack > 0, '后手为 0，请先让荷官补码');
+        invalid(target.stack > 0, '筹码为 0，请先补充筹码');
         invalid(activeSeats(room).length < 10, '牌桌座位已满');
       }
       before = snapshot(room);
@@ -1318,7 +1346,7 @@ export function applyCommand(
       break;
     }
     case 'set-blind-level':
-      assertOwner(room, actor.id);
+      assertAdmin(room, actor.id);
       invalid(betweenHands(room), '请在两手之间修改盲注级别');
       invalid(
         Number.isSafeInteger(command.level) &&
@@ -1339,7 +1367,7 @@ export function applyCommand(
       );
       break;
     case 'set-next-blinds': {
-      assertOwner(room, actor.id);
+      assertAdmin(room, actor.id);
       invalid(
         integer(command.smallBlind) &&
           integer(command.bigBlind) &&
@@ -1363,7 +1391,6 @@ export function applyCommand(
       break;
     }
     case 'refill': {
-      assertAdmin(room, actor.id);
       invalid(betweenHands(room), '补码将在本手结束后处理');
       invalid(
         integer(command.amount) &&
@@ -1373,6 +1400,7 @@ export function applyCommand(
         '补码金额无效',
       );
       const target = participant(room, command.participantId);
+      if (actor.participantId !== target.id) assertAdmin(room, actor.id);
       before = snapshot(room);
       const rebuy = target.stack === 0;
       target.stack += command.amount;

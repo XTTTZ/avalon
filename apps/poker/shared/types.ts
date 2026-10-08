@@ -238,6 +238,7 @@ export type PokerCommand =
   | { type: 'remove-member'; memberId: string }
   | { type: 'seat-member'; memberId: string }
   | { type: 'reorder'; participantIds: string[] }
+  | { type: 'change-seat'; participantId: string; seat: number }
   | { type: 'set-participant-active'; participantId: string; active: boolean }
   | { type: 'set-blind-level'; level: number }
   | { type: 'set-next-blinds'; smallBlind: number; bigBlind: number }

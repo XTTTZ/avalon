@@ -563,7 +563,6 @@ select {
   align-items: center;
   min-width: 0;
   gap: 4px;
-  padding-right: 19px;
 }
 .player-title strong {
   min-width: 0;
@@ -574,16 +573,11 @@ select {
 }
 .player-stack {
   min-width: 0;
-  margin-top: 2px;
   display: flex;
   align-items: baseline;
-  justify-content: center;
-  gap: 3px;
+  justify-content: flex-start;
   color: #53645c;
   line-height: 1;
-}
-.player-stack span {
-  font-size: 8px;
 }
 .player-stack strong {
   min-width: 0;
@@ -597,10 +591,7 @@ select {
   text-overflow: ellipsis;
 }
 .poker-table.dense .player-stack {
-  gap: 2px;
-}
-.poker-table.dense .player-stack span {
-  font-size: 7px;
+  min-width: 0;
 }
 .poker-table.dense .player-stack strong {
   font-size: 10px;
@@ -647,11 +638,16 @@ select {
   font-size: 8px;
 }
 .player-position-slot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  min-width: 18px;
+  min-width: 0;
   min-height: 14px;
+}
+.player-card-meta {
+  min-width: 0;
+  margin-top: 2px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px;
 }
 .player-state-slot {
   height: 13px;
@@ -1179,6 +1175,42 @@ select {
 .start-panel {
   display: grid;
   gap: 13px;
+}
+.cash-controls {
+  display: grid;
+  gap: 10px;
+  border-color: #bed5c8;
+  background: linear-gradient(145deg, #fbfefc, #eef6f1);
+}
+.cash-controls-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cash-controls-heading > strong {
+  color: var(--forest);
+  font:
+    850 21px/1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+.cash-control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+.cash-control-grid button {
+  min-width: 105px;
+  min-height: 46px;
+}
+.cash-seat-toggle {
+  min-height: 44px;
+  border: 1px solid #cbd9d0;
+  color: #496157;
+  background: #fff;
 }
 .next-blinds {
   display: flex;

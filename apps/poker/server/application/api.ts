@@ -240,6 +240,15 @@ function validateCommand(value: unknown): asserts value is PokerCommand {
         throw new PokerError('INVALID', '座位列表无效');
       for (const id of command.participantIds) validateEntityId(id, '玩家');
       break;
+    case 'change-seat':
+      validateEntityId(command.participantId, '玩家');
+      if (
+        !Number.isSafeInteger(command.seat) ||
+        Number(command.seat) < 0 ||
+        Number(command.seat) > 9
+      )
+        throw new PokerError('INVALID', '座位无效');
+      break;
     case 'set-participant-active':
       validateEntityId(command.participantId, '玩家');
       if (typeof command.active !== 'boolean') throw new PokerError('INVALID', '入座状态无效');

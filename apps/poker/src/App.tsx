@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   AlertTriangle,
-  ArrowDown,
-  ArrowUp,
   Check,
   CirclePause,
   CirclePlay,
@@ -349,12 +347,13 @@ function PlayerCard({
         <span className="seat-number">{(player.seat ?? 0) + 1}</span>
         <strong title={player.name}>{player.name}</strong>
       </div>
-      <div className="player-position-slot">
-        <PositionBadges room={room} id={player.id} />
-      </div>
-      <div className="player-stack" aria-label={`后手 ${amount(player.stack)}`}>
-        <span>后手</span>
-        <strong>{amount(player.stack)}</strong>
+      <div className="player-card-meta">
+        <div className="player-stack" aria-label={`剩余筹码 ${amount(player.stack)}`}>
+          <strong>{amount(player.stack)}</strong>
+        </div>
+        <div className="player-position-slot">
+          <PositionBadges room={room} id={player.id} />
+        </div>
       </div>
       <div className="player-state-slot">
         {status && (
@@ -462,7 +461,7 @@ function PlayerDetailPopover({
             <dd>{amount(state?.handCommitted ?? 0)}</dd>
           </div>
           <div>
-            <dt>后手</dt>
+            <dt>剩余筹码</dt>
             <dd>{amount(player.stack)}</dd>
           </div>
         </dl>
@@ -946,7 +945,7 @@ function PlayerListRow({
             <b>{amount(state?.handCommitted ?? 0)}</b>
           </span>
           <span className="list-amount secondary-value">
-            <small>后手</small>
+            <small>筹码</small>
             <b>{amount(player.stack)}</b>
           </span>
         </>
@@ -975,6 +974,7 @@ function TableView({
   const arranged =
     selfIndex > 0 ? [...seated.slice(selfIndex), ...seated.slice(0, selfIndex)] : seated;
   const hand = room.hand;
+  const betweenHands = !hand || ['SETTLED', 'VOIDED'].includes(hand.phase);
   const online = (room.config.mode ?? 'chips') === 'online';
   const compactTable = Boolean(room.legalActions);
   const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
@@ -1015,30 +1015,36 @@ function TableView({
                   : arranged.length >= 5
                     ? 39
                     : 35;
-            const yRadius = compactTable
-              ? arranged.length >= 7
-                ? 39
-                : 38
-              : arranged.length >= 7
-                ? 42
-                : arranged.length >= 5
-                  ? 41
-                  : 39;
+            const yRadius = online
+              ? compactTable
+                ? 32
+                : arranged.length >= 7
+                  ? 34
+                  : 35
+              : compactTable
+                ? arranged.length >= 7
+                  ? 39
+                  : 38
+                : arranged.length >= 7
+                  ? 42
+                  : arranged.length >= 5
+                    ? 41
+                    : 39;
             const x = 50 + Math.cos(angle) * xRadius;
             const y = 50 + Math.sin(angle) * yRadius;
             const distance = Math.hypot(50 - x, 50 - y) || 1;
             const towardX = (50 - x) / distance;
             const towardY = (50 - y) / distance;
-            const perpendicularX = -towardY;
-            const perpendicularY = towardX;
-            const tableItemDistance = 60 + Math.abs(towardX) * 28;
+            const nearVerticalEdge = Math.abs(towardX) < 0.3;
+            const chipX = towardX * 58 + (nearVerticalEdge ? 42 : 0);
+            const chipY = towardY * (nearVerticalEdge ? 40 : 52) - 14;
             const seatStyle = {
               left: `${x}%`,
               top: `${y}%`,
-              '--card-x': `${towardX * tableItemDistance + perpendicularX * 32}px`,
-              '--card-y': `${towardY * tableItemDistance + perpendicularY * 32}px`,
-              '--chip-x': `${towardX * tableItemDistance - perpendicularX * 32}px`,
-              '--chip-y': `${towardY * tableItemDistance - perpendicularY * 32}px`,
+              '--card-x': '0px',
+              '--card-y': arranged.length >= 7 ? '-50px' : '-54px',
+              '--chip-x': `${chipX}px`,
+              '--chip-y': `${chipY}px`,
               '--muck-x': `${towardX * 126}px`,
               '--muck-y': `${towardY * 126}px`,
             } as CSSProperties;
@@ -1083,13 +1089,139 @@ function TableView({
       <OnlineShowdown room={room} />
       {!online && <DealerPrompt room={room} busy={busy} command={command} />}
       {!online && <Showdown room={room} busy={busy} command={command} />}
-      {(!hand || ['SETTLED', 'VOIDED'].includes(hand.phase)) && (
-        <StartPanel room={room} busy={busy} command={command} />
-      )}
-      {hand && !['SETTLED', 'VOIDED'].includes(hand.phase) && (
-        <ActionBar room={room} busy={busy} command={command} />
-      )}
+      {betweenHands && <CashGameControls room={room} busy={busy} command={command} />}
+      {betweenHands && <StartPanel room={room} busy={busy} command={command} />}
+      {hand && !betweenHands && <ActionBar room={room} busy={busy} command={command} />}
     </>
+  );
+}
+
+function CashGameControls({
+  room,
+  busy,
+  command,
+}: {
+  room: RoomView;
+  busy: boolean;
+  command: ReturnType<typeof usePoker>['command'];
+}) {
+  const self = room.participants.find((item) => item.id === room.me.participantId);
+  const [refillAmount, setRefillAmount] = useState(room.config.defaultRefill);
+  const occupiedSeats = new Set(
+    room.participants
+      .filter((item) => item.id !== self?.id && item.active && item.seat !== null)
+      .map((item) => item.seat as number),
+  );
+  const availableSeats = Array.from({ length: 10 }, (_, seat) => seat).filter(
+    (seat) => !occupiedSeats.has(seat),
+  );
+  const preferredSeat = self?.seat ?? availableSeats[0] ?? 0;
+  const [targetSeat, setTargetSeat] = useState(preferredSeat);
+  const selectedSeat = availableSeats.includes(targetSeat) ? targetSeat : preferredSeat;
+  const refillValid =
+    Number.isSafeInteger(refillAmount) &&
+    refillAmount > 0 &&
+    refillAmount % room.config.chipUnit === 0;
+
+  if (!self)
+    return (
+      <section className="card cash-controls">
+        <div>
+          <p className="eyebrow">我的牌桌操作</p>
+          <h2>加入牌桌</h2>
+          <p className="muted">加入后获得 {amount(room.config.initialStack)} 筹码。</p>
+        </div>
+        <button
+          className="primary"
+          disabled={busy || room.participants.filter((item) => item.active).length >= 10}
+          onClick={() => void command({ type: 'seat-member', memberId: room.me.memberId })}
+        >
+          <Users size={18} /> 加入牌桌
+        </button>
+      </section>
+    );
+
+  const seated = self.active && self.seat !== null;
+  return (
+    <section className="card cash-controls">
+      <div className="cash-controls-heading">
+        <div>
+          <p className="eyebrow">我的牌桌操作</p>
+          <h2>{seated ? `${self.seat! + 1} 号位` : '旁观中'}</h2>
+        </div>
+        <strong>{amount(self.stack)}</strong>
+      </div>
+      <div className="cash-control-grid">
+        <label>
+          补充筹码
+          <input
+            type="number"
+            inputMode="numeric"
+            min={room.config.chipUnit}
+            step={room.config.chipUnit}
+            value={refillAmount}
+            onChange={(event) => setRefillAmount(Number(event.target.value))}
+          />
+        </label>
+        <button
+          className="secondary"
+          disabled={busy || !refillValid}
+          onClick={() =>
+            void command({ type: 'refill', participantId: self.id, amount: refillAmount })
+          }
+        >
+          <Coins size={18} /> 补充
+        </button>
+      </div>
+      {seated && (
+        <div className="cash-control-grid">
+          <label>
+            更换空座
+            <select
+              value={selectedSeat}
+              onChange={(event) => setTargetSeat(Number(event.target.value))}
+            >
+              {availableSeats.map((seat) => (
+                <option key={seat} value={seat}>
+                  {seat + 1} 号位{seat === self.seat ? '（当前）' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="secondary"
+            disabled={busy || selectedSeat === self.seat}
+            onClick={() =>
+              void command({ type: 'change-seat', participantId: self.id, seat: selectedSeat })
+            }
+          >
+            确认换座
+          </button>
+        </div>
+      )}
+      <button
+        className="cash-seat-toggle"
+        disabled={busy || (!seated && self.stack === 0)}
+        title={!seated && self.stack === 0 ? '请先补充筹码' : undefined}
+        onClick={() =>
+          void command({
+            type: 'set-participant-active',
+            participantId: self.id,
+            active: !seated,
+          })
+        }
+      >
+        {seated ? (
+          <>
+            <Eye size={18} /> 转为旁观
+          </>
+        ) : (
+          <>
+            <Users size={18} /> 加入牌桌
+          </>
+        )}
+      </button>
+    </section>
   );
 }
 
@@ -1265,44 +1397,34 @@ function ManageView({
   const betweenHands = !room.hand || ['SETTLED', 'VOIDED'].includes(room.hand.phase);
   const activeMemberIds = new Set(room.members.map((item) => item.id));
   const currentPlayers = room.participants.filter((item) => activeMemberIds.has(item.memberId));
-  const spectatorMembers = room.members.filter((item) => !item.participantId);
-  const seated = [...currentPlayers]
-    .filter((item) => item.active && item.seat !== null)
-    .sort((a, b) => a.seat! - b.seat!);
-  const move = (id: string, direction: -1 | 1) => {
-    const ids = seated.map((item) => item.id);
-    const index = ids.indexOf(id);
-    const target = index + direction;
-    if (target < 0 || target >= ids.length) return;
-    [ids[index], ids[target]] = [ids[target], ids[index]];
-    void command({ type: 'reorder', participantIds: ids });
-  };
   return (
     <div className="manage-stack">
       <section className="card">
         <h2>房间与荷官</h2>
         <p className="muted">Button 是牌桌位置；Dealer 是有管理权限的人，两者彼此独立。</p>
         {room.me.isOwner && (
+          <label>
+            额外 Dealer
+            <select
+              value={room.dealerMemberId ?? ''}
+              onChange={(event) =>
+                void command({ type: 'assign-dealer', memberId: event.target.value || null })
+              }
+            >
+              <option value="">仅房主</option>
+              {room.members
+                .filter((item) => item.id !== room.ownerMemberId)
+                .map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                    {item.participantId ? ' · 玩家' : ' · 旁观'}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
+        {room.me.isDealer && (
           <>
-            <label>
-              额外 Dealer
-              <select
-                value={room.dealerMemberId ?? ''}
-                onChange={(event) =>
-                  void command({ type: 'assign-dealer', memberId: event.target.value || null })
-                }
-              >
-                <option value="">仅房主</option>
-                {room.members
-                  .filter((item) => item.id !== room.ownerMemberId)
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                      {item.participantId ? ' · 玩家' : ' · 旁观'}
-                    </option>
-                  ))}
-              </select>
-            </label>
             <div className="blind-editor">
               <label>
                 下一手 SB
@@ -1394,155 +1516,60 @@ function ManageView({
           </div>
         )}
       </section>
-      <section className="card">
-        <h2>玩家与座次</h2>
-        <p className="muted">玩家可在两手之间自行入座或进入旁观席；后手为 0 时需先由荷官补码。</p>
-        {currentPlayers.map((player) => {
-          const index = seated.findIndex((item) => item.id === player.id);
-          const isSeated = index >= 0 && player.active;
-          const playerMember = room.members.find((item) => item.id === player.memberId)!;
-          const canControlSeat = room.me.isDealer || room.me.participantId === player.id;
-          return (
-            <div className="manage-player" key={player.id}>
-              <div className="manage-player-info">
-                <span className="avatar small">{player.name.slice(0, 1)}</span>
-                <span className="manage-player-copy">
-                  <strong title={player.name}>{player.name}</strong>
-                  <small>
-                    {isSeated ? `${(player.seat ?? 0) + 1}号位` : '旁观席'} · {amount(player.stack)}{' '}
-                    筹码
-                  </small>
+      {room.me.isOwner && (
+        <section className="card">
+          <h2>成员与房主</h2>
+          {room.members.map((item) => {
+            const player = currentPlayers.find((candidate) => candidate.memberId === item.id);
+            const status =
+              player?.active && player.seat !== null ? `${player.seat + 1}号位` : '旁观';
+            return (
+              <div className="member-row" key={item.id}>
+                <span>
+                  {item.name} · {status}
                 </span>
-              </div>
-              {canControlSeat && (
-                <div className="seat-tools">
-                  {room.me.isDealer && isSeated && (
-                    <>
-                      <button
-                        aria-label="上移"
-                        disabled={busy || !betweenHands || index === 0}
-                        onClick={() => move(player.id, -1)}
-                      >
-                        <ArrowUp size={18} />
-                      </button>
-                      <button
-                        aria-label="下移"
-                        disabled={busy || !betweenHands || index === seated.length - 1}
-                        onClick={() => move(player.id, 1)}
-                      >
-                        <ArrowDown size={18} />
-                      </button>
-                    </>
-                  )}
-                  <button
-                    className="chip-button"
-                    disabled={busy || !betweenHands || (!isSeated && player.stack === 0)}
-                    title={!isSeated && player.stack === 0 ? '请先由荷官补码' : undefined}
-                    onClick={() =>
-                      void command({
-                        type: 'set-participant-active',
-                        participantId: player.id,
-                        active: !isSeated,
-                      })
-                    }
-                  >
-                    {isSeated ? '旁观' : '入座'}
-                  </button>
-                  {room.me.isOwner && playerMember.id !== room.ownerMemberId && (
+                <div className="member-actions">
+                  {item.id !== room.ownerMemberId && (
                     <button
                       className="icon-danger"
-                      aria-label={`移除 ${player.name}`}
-                      disabled={busy || !betweenHands}
+                      aria-label={`移除 ${item.name}`}
+                      disabled={busy || (Boolean(player) && !betweenHands)}
                       onClick={() => {
-                        if (window.confirm(`确认让 ${player.name} 离开房间？历史账务会保留。`))
-                          void command({ type: 'remove-member', memberId: playerMember.id });
+                        if (window.confirm(`确认让 ${item.name} 离开房间？历史账务会保留。`))
+                          void command({ type: 'remove-member', memberId: item.id });
                       }}
                     >
                       <Trash2 size={17} />
                     </button>
                   )}
                 </div>
-              )}
-              {room.me.isDealer && (
-                <button
-                  className="chip-button"
-                  disabled={busy || !betweenHands}
-                  onClick={() =>
-                    void command({
-                      type: 'refill',
-                      participantId: player.id,
-                      amount: room.config.defaultRefill,
-                    })
-                  }
-                >
-                  +{amount(room.config.defaultRefill)}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </section>
-      {room.me.isDealer && (room.me.isOwner || spectatorMembers.length > 0) && (
-        <section className="card">
-          <h2>{room.me.isOwner ? '成员与房主' : '旁观成员'}</h2>
-          {spectatorMembers.map((item) => (
-            <div className="member-row" key={item.id}>
-              <span>{item.name} · 旁观</span>
-              <div className="member-actions">
-                <button
-                  className="chip-button"
-                  disabled={busy || !betweenHands}
-                  onClick={() => void command({ type: 'seat-member', memberId: item.id })}
-                >
-                  入座为玩家
-                </button>
-                {room.me.isOwner && item.id !== room.ownerMemberId && (
-                  <button
-                    className="icon-danger"
-                    aria-label={`移除 ${item.name}`}
-                    disabled={busy}
-                    onClick={() => {
-                      if (window.confirm(`确认让 ${item.name} 离开房间？`))
-                        void command({ type: 'remove-member', memberId: item.id });
-                    }}
-                  >
-                    <Trash2 size={17} />
-                  </button>
-                )}
               </div>
-            </div>
-          ))}
-          {room.me.isOwner && (
-            <>
-              <label>
-                转移房主给
-                <select
-                  value={ownerTarget}
-                  onChange={(event) => setOwnerTarget(event.target.value)}
-                >
-                  <option value="">选择成员</option>
-                  {room.members
-                    .filter((item) => item.id !== room.ownerMemberId)
-                    .map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <button
-                className="secondary"
-                disabled={busy || !ownerTarget}
-                onClick={() => {
-                  const target = room.members.find((item) => item.id === ownerTarget);
-                  if (target && window.confirm(`确认把房主转移给 ${target.name}？`))
-                    void command({ type: 'transfer-owner', memberId: ownerTarget });
-                }}
-              >
-                确认转移房主
-              </button>
-            </>
-          )}
+            );
+          })}
+          <label>
+            转移房主给
+            <select value={ownerTarget} onChange={(event) => setOwnerTarget(event.target.value)}>
+              <option value="">选择成员</option>
+              {room.members
+                .filter((item) => item.id !== room.ownerMemberId)
+                .map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <button
+            className="secondary"
+            disabled={busy || !ownerTarget}
+            onClick={() => {
+              const target = room.members.find((item) => item.id === ownerTarget);
+              if (target && window.confirm(`确认把房主转移给 ${target.name}？`))
+                void command({ type: 'transfer-owner', memberId: ownerTarget });
+            }}
+          >
+            确认转移房主
+          </button>
         </section>
       )}
       {room.me.isDealer && (
