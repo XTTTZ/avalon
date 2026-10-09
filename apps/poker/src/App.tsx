@@ -13,10 +13,12 @@ import {
   Eye,
   History,
   LogOut,
+  Moon,
   RefreshCw,
   RotateCcw,
   Settings,
   Spade,
+  Sun,
   Trash2,
   Users,
   X,
@@ -32,7 +34,31 @@ import {
 } from '../shared/types';
 import { usePoker } from './api/client';
 
-const amount = (value: number) => new Intl.NumberFormat('zh-CN').format(value);
+const amount = (value: number) => String(value);
+type Theme = 'light' | 'dark';
+
+function ThemeToggle({
+  theme,
+  onToggle,
+  className = '',
+}: {
+  theme: Theme;
+  onToggle: () => void;
+  className?: string;
+}) {
+  const nextTheme = theme === 'dark' ? '浅色' : '深色';
+  return (
+    <button
+      type="button"
+      className={`theme-toggle ${className}`.trim()}
+      aria-label={`切换为${nextTheme}模式`}
+      title={`切换为${nextTheme}模式`}
+      onClick={onToggle}
+    >
+      {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+    </button>
+  );
+}
 const streetName = {
   PREFLOP: 'Preflop',
   FLOP: 'Flop',
@@ -144,10 +170,14 @@ function Home({
   busy,
   create,
   join,
+  theme,
+  onToggleTheme,
 }: {
   busy: boolean;
   create: (name: string, config: GameConfig) => Promise<boolean>;
   join: (code: string, name: string, as: 'player' | 'spectator') => Promise<boolean>;
+  theme: Theme;
+  onToggleTheme: () => void;
 }) {
   const [name, setName] = useState(() => localStorage.getItem('poker.publicName') ?? '');
   const [code, setCode] = useState(() => new URLSearchParams(location.search).get('room') ?? '');
@@ -174,6 +204,7 @@ function Home({
   const remember = () => localStorage.setItem('poker.publicName', name.trim());
   return (
     <main className="shell home-shell">
+      <ThemeToggle theme={theme} onToggle={onToggleTheme} className="home-theme-toggle" />
       <section className="hero">
         <div className="brand-mark">
           <Spade size={30} />
@@ -1836,7 +1867,17 @@ function ManageView({
   );
 }
 
-function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomView }) {
+function Room({
+  game,
+  room,
+  theme,
+  onToggleTheme,
+}: {
+  game: ReturnType<typeof usePoker>;
+  room: RoomView;
+  theme: Theme;
+  onToggleTheme: () => void;
+}) {
   const [tab, setTab] = useState<'table' | 'history' | 'summary' | 'manage'>('table');
   const [refreshing, setRefreshing] = useState(false);
   const invite = useMemo(
@@ -1892,6 +1933,7 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
                 ? '连接中'
                 : '离线'}
           </span>
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           <button aria-label="邀请" onClick={() => setShowInvite(!showInvite)}>
             <Copy size={18} />
           </button>
@@ -1959,6 +2001,18 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
 
 export default function App() {
   const game = usePoker();
+  const [theme, setTheme] = useState<Theme>(() =>
+    document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
+  );
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem('poker.theme', theme);
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', theme === 'dark' ? '#0c1511' : '#164b3a');
+  }, [theme]);
+  const toggleTheme = () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
   return (
     <>
       {game.error && (
@@ -1974,9 +2028,15 @@ export default function App() {
         </div>
       )}
       {game.room ? (
-        <Room game={game} room={game.room} />
+        <Room game={game} room={game.room} theme={theme} onToggleTheme={toggleTheme} />
       ) : (
-        <Home busy={game.busy} create={game.create} join={game.join} />
+        <Home
+          busy={game.busy}
+          create={game.create}
+          join={game.join}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
       )}
     </>
   );

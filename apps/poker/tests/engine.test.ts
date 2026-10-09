@@ -149,6 +149,50 @@ describe('Poker betting engine', () => {
     expect(room.hand!.phase).toBe('AWAITING_STREET_CONFIRMATION');
   });
 
+  it.each(['FLOP', 'TURN', 'RIVER'] as const)(
+    'offers small and overbet pot ratios when opening the %s',
+    (street) => {
+      const room = flopState(roomWithPlayers(3));
+      room.hand!.street = street;
+      room.hand!.bigBlind = 20;
+      room.hand!.lastFullRaiseSize = 20;
+      for (const player of room.hand!.players) player.handCommitted = 40;
+
+      const shortcuts = legalActions(room, room.hand!.actorId!)!.shortcuts;
+      expect(shortcuts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ label: '1/4 Pot', to: 30 }),
+          expect.objectContaining({ label: '4/3 Pot', to: 160 }),
+          expect.objectContaining({ label: '1.5 Pot', to: 180 }),
+        ]),
+      );
+    },
+  );
+
+  it('keeps pot ratios and bet multiples when raising postflop', () => {
+    const room = flopState(roomWithPlayers(3));
+    const [actor, bettor, priorContributor] = room.hand!.players;
+    room.hand!.bigBlind = 20;
+    room.hand!.currentBet = 20;
+    room.hand!.lastFullRaiseSize = 20;
+    actor.streetCommitted = 0;
+    actor.handCommitted = 0;
+    bettor.streetCommitted = 20;
+    bettor.handCommitted = 20;
+    priorContributor.handCommitted = 100;
+
+    const shortcuts = legalActions(room, actor.participantId)!.shortcuts;
+    expect(shortcuts.find((item) => item.to === 40)?.label).toBe('1/3 Pot · 2×');
+    expect(shortcuts.find((item) => item.to === 50)?.label).toBe('2.5×');
+    expect(shortcuts.find((item) => item.to === 60)?.label).toBe('1/2 Pot · 3×');
+    expect(shortcuts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: '4/3 Pot', to: 160 }),
+        expect.objectContaining({ label: '1.5 Pot', to: 180 }),
+      ]),
+    );
+  });
+
   it('advances an all-in runout with one dealer confirmation', () => {
     let room = flopState(roomWithPlayers(2, 100));
     for (const participant of room.participants) forceStack(room, participant.id, 0);

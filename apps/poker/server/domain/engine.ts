@@ -622,11 +622,14 @@ export function legalActions(room: RoomState, participantId: string): LegalActio
   const ratio = (value: number, numerator: number, denominator: number) =>
     ceilRatio(value, numerator, denominator, room.config.chipUnit);
   const potCandidates = [
+    { label: '1/4 Pot', raw: ratio(potTotal, 1, 4) },
     { label: '1/3 Pot', raw: ratio(potTotal, 1, 3) },
     { label: '1/2 Pot', raw: ratio(potTotal, 1, 2) },
     { label: '2/3 Pot', raw: ratio(potTotal, 2, 3) },
     { label: '3/4 Pot', raw: ratio(potTotal, 3, 4) },
     { label: '1 Pot', raw: ratio(potTotal, 1, 1) },
+    { label: '4/3 Pot', raw: ratio(potTotal, 4, 3) },
+    { label: '1.5 Pot', raw: ratio(potTotal, 3, 2) },
   ];
   let candidates: { label: string; raw: number }[];
   if (hand.street === 'PREFLOP' && hand.currentBet <= hand.bigBlind) {
@@ -647,9 +650,7 @@ export function legalActions(room: RoomState, participantId: string): LegalActio
     candidates = potCandidates;
   } else {
     candidates = [
-      { label: '1/3 Pot', raw: ratio(potTotal, 1, 3) },
-      { label: '1/2 Pot', raw: ratio(potTotal, 1, 2) },
-      { label: '2/3 Pot', raw: ratio(potTotal, 2, 3) },
+      ...potCandidates,
       { label: '2×', raw: ratio(hand.currentBet, 2, 1) },
       { label: '2.5×', raw: ratio(hand.currentBet, 5, 2) },
       { label: '3×', raw: ratio(hand.currentBet, 3, 1) },
@@ -662,17 +663,29 @@ export function legalActions(room: RoomState, participantId: string): LegalActio
     const to = Math.min(maxTo, Math.max(minimum, candidate.raw));
     if (to <= player.streetCommitted) continue;
     if ((action === 'bet' && !canBet) || (action === 'raise' && !canRaise)) continue;
-    if (!shortcuts.some((item) => item.to === to)) {
+    const label =
+      to === maxTo
+        ? 'All-in'
+        : to === minimum && candidate.raw < minimum
+          ? '最低'
+          : candidate.label;
+    const existing = shortcuts.find((item) => item.to === to);
+    if (!existing) {
       shortcuts.push({
-        label:
-          to === maxTo
-            ? 'All-in'
-            : to === minimum && candidate.raw < minimum
-              ? '最低'
-              : candidate.label,
+        label,
         action: to === maxTo ? 'all-in' : action,
         to,
       });
+    } else if (existing.label === '最低' && label !== '最低') {
+      existing.label = label;
+    } else if (
+      label !== '最低' &&
+      label !== 'All-in' &&
+      existing.label !== '最低' &&
+      existing.label !== 'All-in' &&
+      !existing.label.split(' · ').includes(label)
+    ) {
+      existing.label = `${existing.label} · ${label}`;
     }
   }
   if (

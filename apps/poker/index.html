@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#164b3a" />
+    <script>
+      try {
+        if (localStorage.getItem('poker.theme') === 'dark') {
+          document.documentElement.dataset.theme = 'dark';
+          document.documentElement.style.colorScheme = 'dark';
+          document.querySelector('meta[name="theme-color"]').content = '#0c1511';
+        }
+      } catch {}
+    </script>
     <meta name="description" content="电子筹码与线上德州扑克" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Poker · 德州扑克</title>
