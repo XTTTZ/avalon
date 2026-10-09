@@ -378,26 +378,18 @@ function PlayerCard({
   const state = room.hand?.players.find((item) => item.participantId === player.id);
   const acting = room.hand?.actorId === player.id;
   const self = room.me.participantId === player.id;
-  const status = state?.folded
-    ? 'FOLD'
-    : state?.allIn
-      ? 'ALL-IN'
-      : acting
-        ? '行动中'
-        : !player.active
-          ? '暂停'
-          : '';
+  const status = state?.folded ? 'FOLD' : state?.allIn ? 'ALL-IN' : !player.active ? '暂停' : '';
   return (
     <button
       type="button"
       className={`player-card table-seat ${acting ? 'acting' : ''} ${state?.folded ? 'folded' : ''} ${self ? 'self' : ''}`}
-      aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}，本街下注 ${amount(state?.streetCommitted ?? 0)}`}
+      aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}，本街下注 ${amount(state?.streetCommitted ?? 0)}${acting ? '，行动中' : ''}${status ? `，${status}` : ''}`}
       aria-haspopup="dialog"
       onClick={onSelect}
     >
+      <PositionBadges room={room} id={player.id} />
       <div className="player-title">
         <strong title={player.name}>{player.name}</strong>
-        <PositionBadges room={room} id={player.id} />
       </div>
       <div className="player-card-meta">
         <div className="player-stack" aria-label={`剩余筹码 ${amount(player.stack)}`}>
@@ -406,9 +398,7 @@ function PlayerCard({
       </div>
       <div className="player-state-slot">
         {status && (
-          <span
-            className={`status ${acting && !state?.folded && !state?.allIn ? 'turn' : ''} ${state?.folded ? 'fold' : ''} ${state?.allIn ? 'allin' : ''}`}
-          >
+          <span className={`status ${state?.folded ? 'fold' : ''} ${state?.allIn ? 'allin' : ''}`}>
             {status}
           </span>
         )}
@@ -1046,7 +1036,7 @@ function TableView({
   const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
   const dense = arranged.length >= 7;
   const narrowRows = tableWidth <= 335 && arranged.length <= 8;
-  const feltWidth = narrowRows ? tableWidth - 12 : tableWidth * 0.71;
+  const feltWidth = narrowRows ? tableWidth - 12 : Math.min(tableWidth * 0.71, tableWidth - 102);
   const feltHeight = arranged.length > 8 ? Math.max(feltWidth, 350) : feltWidth;
   const tableHeight = feltHeight + 98;
   const seatWidth = tableWidth <= 335 ? 60 : Math.min(70, Math.max(64, tableWidth * 0.185));
@@ -1101,9 +1091,14 @@ function TableView({
             const seatPoint = side
               ? { x: sign * (feltWidth / 2 + 3 + frameWidth / 2), y: (slot.along * feltHeight) / 2 }
               : { x: (slot.along * feltWidth) / 2, y: sign * (feltHeight / 2 + 3 + 23) };
+            const cornerInset =
+              !side && Math.abs(slot.along) > 0.6 ? Math.max(0, (230 - feltWidth) / 5) : 0;
             const cardPoint = side
               ? { x: sign * (feltWidth / 2 - 5 - 4 - cardWidth / 2), y: seatPoint.y }
-              : { x: seatPoint.x, y: sign * (feltHeight / 2 - 5 - 4 - cardHeight / 2) };
+              : {
+                  x: seatPoint.x,
+                  y: sign * (feltHeight / 2 - 5 - 4 - cornerInset - cardHeight / 2),
+                };
             const chipPoint = side
               ? {
                   x: cardPoint.x - sign * (cardWidth / 2 + 4 + chipWidth / 2),
