@@ -236,6 +236,190 @@ describe('Pots and settlement', () => {
 });
 
 describe('Permissions and correction', () => {
+  it('moves left and right past the neighboring player, preserving gaps and other seats', () => {
+    let room = roomWithPlayers(4);
+    room.participants.forEach((item, index) => (item.seat = [0, 2, 5, 8][index]));
+    const targetId = room.participants[1].id;
+    room = applyCommand(
+      room,
+      'user-2',
+      { type: 'move-seat', participantId: targetId, direction: 'left' },
+      1300,
+    );
+    expect(room.participants.map((item) => item.seat)).toEqual([0, 5, 2, 8]);
+    expect(room.events.at(-1)).toMatchObject({
+      type: 'SEATS_CHANGED',
+      participantId: targetId,
+      detail: '玩家2 向左换到 玩家3 的另一侧',
+    });
+    room = applyCommand(
+      room,
+      'user-2',
+      { type: 'move-seat', participantId: targetId, direction: 'right' },
+      1400,
+    );
+    expect(room.participants.map((item) => item.seat)).toEqual([0, 2, 5, 8]);
+  });
+
+  it('wraps around the table, ignores spectators, and restores both seats on undo', () => {
+    let room = roomWithPlayers(4);
+    const targetId = room.participants[0].id;
+    room = applyCommand(
+      room,
+      'user-1',
+      { type: 'set-participant-active', participantId: room.participants[3].id, active: false },
+      1200,
+    );
+    room = joinRoom(room, 'spectator', '旁观', 'spectator', 1250);
+    const originalSeats = room.participants.map((item) => item.seat);
+    room = applyCommand(
+      room,
+      'user-1',
+      { type: 'move-seat', participantId: targetId, direction: 'right' },
+      1300,
+    );
+    expect(room.participants.map((item) => item.seat)).toEqual([2, 1, 0, null]);
+    const moveEventId = room.events.at(-1)!.id;
+    room = applyCommand(room, 'user-1', { type: 'undo' }, 1400);
+    expect(room.participants.map((item) => item.seat)).toEqual(originalSeats);
+    expect(room.events.find((item) => item.id === moveEventId)?.revertedBy).toBe(
+      room.events.at(-1)!.id,
+    );
+  });
+
+  it('supports either direction heads-up and rejects a table with only one seated player', () => {
+    let room = roomWithPlayers(2);
+    const targetId = room.participants[1].id;
+    room = applyCommand(
+      room,
+      'user-2',
+      { type: 'move-seat', participantId: targetId, direction: 'left' },
+      1300,
+    );
+    expect(room.participants.map((item) => item.seat)).toEqual([1, 0]);
+    room = applyCommand(
+      room,
+      'user-2',
+      { type: 'move-seat', participantId: targetId, direction: 'right' },
+      1400,
+    );
+    expect(room.participants.map((item) => item.seat)).toEqual([0, 1]);
+    room = applyCommand(
+      room,
+      'user-2',
+      { type: 'set-participant-active', participantId: targetId, active: false },
+      1500,
+    );
+    expect(() =>
+      applyCommand(room, 'user-1', {
+        type: 'move-seat',
+        participantId: room.participants[0].id,
+        direction: 'left',
+      }),
+    ).toThrow('需要至少两位入座玩家');
+    expect(() =>
+      applyCommand(room, 'user-2', {
+        type: 'move-seat',
+        participantId: targetId,
+        direction: 'left',
+      }),
+    ).toThrow('请先加入牌桌再换座');
+  });
+
+  it('allows owner and spectator dealer to move players and send them to spectators', () => {
+    let room = roomWithPlayers(3);
+    room = joinRoom(room, 'spectator', '荷官', 'spectator', 1200);
+    const spectator = room.members.find((item) => item.userId === 'spectator')!;
+    room = applyCommand(room, 'user-1', { type: 'assign-dealer', memberId: spectator.id }, 1300);
+    const targetId = room.participants[1].id;
+    room = applyCommand(
+      room,
+      'user-1',
+      { type: 'move-seat', participantId: targetId, direction: 'left' },
+      1400,
+    );
+    expect(room.participants.map((item) => item.seat)).toEqual([0, 2, 1]);
+    room = applyCommand(
+      room,
+      'spectator',
+      { type: 'move-seat', participantId: targetId, direction: 'right' },
+      1500,
+    );
+    expect(room.participants.map((item) => item.seat)).toEqual([0, 1, 2]);
+    for (const userId of ['user-1', 'spectator']) {
+      room = applyCommand(
+        room,
+        userId,
+        { type: 'set-participant-active', participantId: targetId, active: false },
+        1600,
+      );
+      expect(room.participants[1]).toMatchObject({ active: false, seat: null });
+      room = applyCommand(
+        room,
+        userId,
+        { type: 'set-participant-active', participantId: targetId, active: true },
+        1700,
+      );
+    }
+    room = applyCommand(room, 'user-1', { type: 'assign-dealer', memberId: null }, 1800);
+    expect(() =>
+      applyCommand(room, 'spectator', {
+        type: 'move-seat',
+        participantId: targetId,
+        direction: 'left',
+      }),
+    ).toThrow('需要房主或荷官权限');
+  });
+
+  it('rejects moving another player without permission and any seat changes during a hand', () => {
+    let room = roomWithPlayers(3);
+    const targetId = room.participants[1].id;
+    expect(() =>
+      applyCommand(room, 'user-3', {
+        type: 'move-seat',
+        participantId: targetId,
+        direction: 'left',
+      }),
+    ).toThrow('需要房主或荷官权限');
+    expect(() =>
+      applyCommand(room, 'user-3', {
+        type: 'set-participant-active',
+        participantId: targetId,
+        active: false,
+      }),
+    ).toThrow('需要房主或荷官权限');
+    room = start(room);
+    for (const userId of ['user-1', 'user-2']) {
+      expect(() =>
+        applyCommand(room, userId, {
+          type: 'move-seat',
+          participantId: targetId,
+          direction: 'left',
+        }),
+      ).toThrow('请在两手之间更换座位');
+      expect(() =>
+        applyCommand(room, userId, {
+          type: 'set-participant-active',
+          participantId: targetId,
+          active: false,
+        }),
+      ).toThrow('请在两手之间调整入座状态');
+    }
+  });
+
+  it('rejects moving a participant whose member has left the room', () => {
+    const room = roomWithPlayers(3);
+    const target = room.participants[1];
+    room.members.find((item) => item.id === target.memberId)!.removedAt = 1200;
+    expect(() =>
+      applyCommand(room, 'user-1', {
+        type: 'move-seat',
+        participantId: target.id,
+        direction: 'left',
+      }),
+    ).toThrow('该玩家已离开房间');
+  });
+
   it('lets a spectator dealer advance streets but never act for a player', () => {
     let room = roomWithPlayers(2);
     room = joinRoom(room, 'spectator', '荷官', 'spectator', 1200);

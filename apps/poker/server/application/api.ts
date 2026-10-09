@@ -249,6 +249,11 @@ function validateCommand(value: unknown): asserts value is PokerCommand {
       )
         throw new PokerError('INVALID', '座位无效');
       break;
+    case 'move-seat':
+      validateEntityId(command.participantId, '玩家');
+      if (command.direction !== 'left' && command.direction !== 'right')
+        throw new PokerError('INVALID', '换座方向无效');
+      break;
     case 'set-participant-active':
       validateEntityId(command.participantId, '玩家');
       if (typeof command.active !== 'boolean') throw new PokerError('INVALID', '入座状态无效');

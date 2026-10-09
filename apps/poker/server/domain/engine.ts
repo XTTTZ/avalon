@@ -1309,6 +1309,35 @@ export function applyCommand(
       );
       break;
     }
+    case 'move-seat': {
+      invalid(betweenHands(room), '请在两手之间更换座位');
+      const target = participant(room, command.participantId);
+      if (actor.participantId !== target.id) assertAdmin(room, actor.id);
+      invalid(
+        room.members.some((item) => item.id === target.memberId && !item.removedAt),
+        '该玩家已离开房间',
+      );
+      invalid(target.active && target.seat !== null, '请先加入牌桌再换座');
+      invalid(command.direction === 'left' || command.direction === 'right', '换座方向无效');
+      const seated = activeSeats(room).filter((item) =>
+        room.members.some((entry) => entry.id === item.memberId && !entry.removedAt),
+      );
+      invalid(seated.length > 1, '需要至少两位入座玩家才能换座');
+      const targetIndex = seated.findIndex((item) => item.id === target.id);
+      const offset = command.direction === 'left' ? 1 : -1;
+      const neighbor = seated[(targetIndex + offset + seated.length) % seated.length];
+      before = snapshot(room);
+      [target.seat, neighbor.seat] = [neighbor.seat, target.seat];
+      primary = event(
+        room,
+        actor.id,
+        'SEATS_CHANGED',
+        `${target.name} 向${command.direction === 'left' ? '左' : '右'}换到 ${neighbor.name} 的另一侧`,
+        { participantId: target.id },
+        now,
+      );
+      break;
+    }
     case 'set-participant-active': {
       invalid(betweenHands(room), '请在两手之间调整入座状态');
       const target = participant(room, command.participantId);

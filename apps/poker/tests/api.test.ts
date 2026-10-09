@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, type RoomView } from '../shared/types.js';
+import { DEFAULT_CONFIG, type PokerCommand, type RoomView } from '../shared/types.js';
 import { handleApi } from '../server/application/api.js';
 import { FileStore } from '../server/infrastructure/store.js';
 
@@ -10,6 +10,83 @@ const deps = () => ({
 });
 
 describe('Poker API', () => {
+  it('validates relative seat movement and applies each request only once', async () => {
+    const runtime = deps();
+    const owner = (await handleApi(
+      { action: 'auth.guest', deviceSecret: 'e'.repeat(64) },
+      undefined,
+      runtime,
+    )) as { token: string };
+    const guest = (await handleApi(
+      { action: 'auth.guest', deviceSecret: 'f'.repeat(64) },
+      undefined,
+      runtime,
+    )) as { token: string };
+    let room = (await handleApi(
+      { action: 'create', name: '房主', config: DEFAULT_CONFIG, requestId: 'seat_create_request' },
+      owner.token,
+      runtime,
+    )) as RoomView;
+    room = (await handleApi(
+      {
+        action: 'join',
+        code: room.code,
+        name: '玩家',
+        as: 'player',
+        requestId: 'seat_join_request',
+      },
+      guest.token,
+      runtime,
+    )) as RoomView;
+    const participantId = room.me.participantId!;
+    const request = {
+      action: 'command' as const,
+      code: room.code,
+      expectedVersion: room.version,
+      phaseKey: room.phaseKey,
+      requestId: 'seat_move_request',
+      command: { type: 'move-seat', participantId, direction: 'left' } as PokerCommand,
+    };
+    for (const direction of ['up', '', null, 1]) {
+      await expect(
+        handleApi(
+          { ...request, command: { type: 'move-seat', participantId, direction } },
+          guest.token,
+          runtime,
+        ),
+      ).rejects.toThrow('换座方向无效');
+    }
+    await expect(
+      handleApi(
+        { ...request, command: { type: 'move-seat', direction: 'left' } },
+        guest.token,
+        runtime,
+      ),
+    ).rejects.toThrow('玩家编号无效');
+    const moved = (await handleApi(request, guest.token, runtime)) as RoomView;
+    expect(moved.participants.map((item) => item.seat)).toEqual([1, 0]);
+    const replay = (await handleApi(request, guest.token, runtime)) as RoomView;
+    expect(replay.version).toBe(moved.version);
+    expect(replay.participants.map((item) => item.seat)).toEqual([1, 0]);
+    await expect(
+      handleApi(
+        {
+          ...request,
+          command: {
+            type: 'move-seat',
+            participantId: room.participants[0].id,
+            direction: 'right',
+          },
+          expectedVersion: moved.version,
+          phaseKey: moved.phaseKey,
+          requestId: 'seat_forbidden_request',
+        },
+        guest.token,
+        runtime,
+      ),
+    ).rejects.toThrow('需要房主或荷官权限');
+  });
+
   it('creates, joins and restores a room with isolated guest identities', async () => {
     const runtime = deps();
     const owner = await handleApi(

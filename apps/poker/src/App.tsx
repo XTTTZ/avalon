@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  ArrowLeftRight,
   Check,
   CirclePause,
   CirclePlay,
@@ -38,13 +41,53 @@ const streetName = {
   SHOWDOWN: 'Showdown',
 };
 
-function squarePerimeterPoint(progress: number, halfSize: number) {
-  const distance = (((progress % 1) + 1) % 1) * 8;
-  if (distance < 1) return { x: -distance * halfSize, y: halfSize };
-  if (distance < 3) return { x: -halfSize, y: (2 - distance) * halfSize };
-  if (distance < 5) return { x: (distance - 4) * halfSize, y: -halfSize };
-  if (distance < 7) return { x: halfSize, y: (distance - 6) * halfSize };
-  return { x: (8 - distance) * halfSize, y: halfSize };
+type TableEdge = 'top' | 'bottom' | 'left' | 'right';
+type TableSeatSlot = { edge: TableEdge; along: number };
+
+function tableSeatSlots(count: number, rowsOnly: boolean): TableSeatSlot[] {
+  const slot = (edge: TableEdge, along = 0): TableSeatSlot => ({ edge, along });
+  if (rowsOnly) {
+    const fractions = (n: number) =>
+      n === 1
+        ? [0]
+        : Array.from({ length: n }, (_, i) => ((i / (n - 1)) * 2 - 1) * (n === 4 ? 0.67 : 0.6));
+    const bottom = fractions(Math.max(1, Math.floor(count / 2)))
+      .reverse()
+      .map((x) => slot('bottom', x));
+    const top = fractions(Math.ceil(count / 2)).map((x) => slot('top', x));
+    const around = [...bottom, ...top];
+    const start = bottom.reduce(
+      (best, item, i) => (Math.abs(item.along) < Math.abs(bottom[best].along) ? i : best),
+      0,
+    );
+    return [...around.slice(start), ...around.slice(0, start)].slice(0, count);
+  }
+  const b = (x = 0) => slot('bottom', x);
+  const t = (x = 0) => slot('top', x);
+  const l = (y = 0) => slot('left', y);
+  const r = (y = 0) => slot('right', y);
+  switch (count) {
+    case 1:
+      return [b()];
+    case 2:
+      return [b(), t()];
+    case 3:
+      return [b(), t(-0.45), t(0.45)];
+    case 4:
+      return [b(), l(), t(), r()];
+    case 5:
+      return [b(), l(), t(-0.45), t(0.45), r()];
+    case 6:
+      return [b(0.45), b(-0.45), l(), t(-0.45), t(0.45), r()];
+    case 7:
+      return [b(), b(-0.63), l(), t(-0.45), t(0.45), r(), b(0.63)];
+    case 8:
+      return [b(), b(-0.63), l(), t(-0.63), t(), t(0.63), r(), b(0.63)];
+    case 9:
+      return [b(0.45), b(-0.45), l(0.3), l(-0.3), t(-0.63), t(), t(0.63), r(-0.3), r(0.3)];
+    default:
+      return [b(), b(-0.63), l(0.3), l(-0.3), t(-0.63), t(), t(0.63), r(-0.3), r(0.3), b(0.63)];
+  }
 }
 
 const suitInfo: Record<string, { symbol: string; name: string }> = {
@@ -832,7 +875,7 @@ function OnlineShowdown({ room }: { room: RoomView }) {
   );
 }
 
-function PotSummary({ room }: { room: RoomView }) {
+function PotSummary({ room, onShowPots }: { room: RoomView; onShowPots?: () => void }) {
   const hand = room.hand;
   const hasSidePots = (hand?.pots.length ?? 0) > 1;
   const total = hand?.players.reduce((sum, item) => sum + item.handCommitted, 0) ?? 0;
@@ -846,13 +889,25 @@ function PotSummary({ room }: { room: RoomView }) {
   return (
     <>
       <p className="table-phase">
-        {hand ? `第 ${hand.number} 手 · ${streetName[hand.street]}` : '牌桌准备 · 等待开局'}
+        {hand ? `#${hand.number} · ${streetName[hand.street]}` : '牌桌准备 · 等待开局'}
       </p>
+      {hasSidePots && onShowPots ? (
+        <button
+          className="center-pot pot-details-trigger"
+          onClick={onShowPots}
+          aria-label={`查看 ${hand!.pots.length} 个底池的金额与争夺资格`}
+        >
+          <span>底池</span>
+          <strong>{amount(total)}</strong>
+          <span aria-hidden="true">⌄</span>
+        </button>
+      ) : (
+        <div className="center-pot">
+          <span>底池</span>
+          <strong>{amount(total)}</strong>
+        </div>
+      )}
       <CommunityCards room={room} />
-      <div className="center-pot">
-        <span>底池</span>
-        <strong>{amount(total)}</strong>
-      </div>
       {hand && (
         <>
           <div className="center-meta">
@@ -876,7 +931,7 @@ function PotSummary({ room }: { room: RoomView }) {
               </span>
             )}
           </div>
-          {(hasSidePots || hand.uncalled) && (
+          {hasSidePots && !onShowPots && (
             <div className="center-pots">
               {hasSidePots &&
                 hand.pots.map((pot, index) => (
@@ -965,9 +1020,19 @@ function TableView({
   command: ReturnType<typeof usePoker>['command'];
 }) {
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
+  const [showPots, setShowPots] = useState(false);
+  const tableRef = useRef<HTMLElement>(null);
+  const [tableWidth, setTableWidth] = useState(370);
   const [layout, setLayout] = useState<'table' | 'list'>(() =>
     localStorage.getItem('poker.tableLayout') === 'list' ? 'list' : 'table',
   );
+  useEffect(() => {
+    const table = tableRef.current;
+    if (!table) return;
+    const observer = new ResizeObserver(([entry]) => setTableWidth(entry.contentRect.width));
+    observer.observe(table);
+    return () => observer.disconnect();
+  }, [layout]);
   const seated = [...room.participants]
     .filter((item) => item.active && item.seat !== null)
     .sort((a, b) => a.seat! - b.seat!);
@@ -979,6 +1044,15 @@ function TableView({
   const online = (room.config.mode ?? 'chips') === 'online';
   const compactTable = Boolean(room.legalActions);
   const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
+  const dense = arranged.length >= 7;
+  const narrowRows = tableWidth <= 335 && arranged.length <= 8;
+  const feltWidth = narrowRows ? tableWidth - 12 : tableWidth * 0.71;
+  const feltHeight = arranged.length > 8 ? Math.max(feltWidth, 350) : feltWidth;
+  const tableHeight = feltHeight + 98;
+  const seatWidth = tableWidth <= 335 ? 60 : Math.min(70, Math.max(64, tableWidth * 0.185));
+  const sideWidth = Math.min(seatWidth, (tableWidth - feltWidth - 6) / 2);
+  const slots = tableSeatSlots(Math.max(arranged.length, 1), narrowRows);
+
   const changeLayout = (next: 'table' | 'list') => {
     setLayout(next);
     localStorage.setItem('poker.tableLayout', next);
@@ -1000,46 +1074,59 @@ function TableView({
         <section
           className={`poker-table ${online ? 'online-mode' : ''} ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
           aria-label="牌桌与玩家座位"
+          ref={tableRef}
+          style={
+            {
+              height: tableHeight,
+              '--felt-width': `${feltWidth}px`,
+              '--felt-height': `${feltHeight}px`,
+            } as CSSProperties
+          }
         >
           <div className="table-felt">
             <div className="table-center">
-              <PotSummary room={room} />
+              <PotSummary room={room} onShowPots={() => setShowPots(true)} />
             </div>
           </div>
           {arranged.map((player, index) => {
-            const count = Math.max(arranged.length, 1);
-            const progress = index / count;
-            const seatPoint = squarePerimeterPoint(progress, 43);
-            const cardPoint = squarePerimeterPoint(progress, 27);
-            const chipHalfSize =
-              count <= 2
-                ? 17.5
-                : count === 3
-                  ? 13
-                  : count <= 5
-                    ? 12
-                    : count === 6
-                      ? 17.5
-                      : count === 8
-                        ? 18.5
-                        : 13.5;
-            const chipPhase = count === 6 || count === 8 ? 0.5 : count === 9 ? 0.25 : 0;
-            const chipProgress = progress + chipPhase / count;
-            const chipPoint = squarePerimeterPoint(chipProgress, chipHalfSize);
-            const x = 50 + seatPoint.x;
-            const y = 50 + seatPoint.y;
+            const slot = slots[index];
+            const side = slot.edge === 'left' || slot.edge === 'right';
+            const sign = slot.edge === 'left' || slot.edge === 'top' ? -1 : 1;
+            const cardWidth = dense ? 28 : 31;
+            const cardHeight = dense ? 39 : 43;
+            const chipWidth = dense ? 38 : 42;
+            const chipHeight = dense ? 22 : 24;
+            const frameWidth = side ? sideWidth : seatWidth;
+            // Keep gaps in pixels so a wider viewport does not spread the pieces apart.
+            const seatPoint = side
+              ? { x: sign * (feltWidth / 2 + 3 + frameWidth / 2), y: (slot.along * feltHeight) / 2 }
+              : { x: (slot.along * feltWidth) / 2, y: sign * (feltHeight / 2 + 3 + 23) };
+            const cardPoint = side
+              ? { x: sign * (feltWidth / 2 - 5 - 4 - cardWidth / 2), y: seatPoint.y }
+              : { x: seatPoint.x, y: sign * (feltHeight / 2 - 5 - 4 - cardHeight / 2) };
+            const chipPoint = side
+              ? {
+                  x: cardPoint.x - sign * (cardWidth / 2 + 4 + chipWidth / 2),
+                  y: cardPoint.y + (arranged.length <= 8 ? -26 : 0),
+                }
+              : { x: cardPoint.x, y: cardPoint.y - sign * (cardHeight / 2 + 4 + chipHeight / 2) };
             const seatStyle = {
-              left: `${x}%`,
-              top: `${y}%`,
-              '--card-x': `${cardPoint.x - seatPoint.x}cqw`,
-              '--card-y': `${cardPoint.y - seatPoint.y}cqw`,
-              '--chip-x': `${chipPoint.x - seatPoint.x}cqw`,
-              '--chip-y': `${chipPoint.y - seatPoint.y}cqw`,
-              '--muck-x': `${-seatPoint.x}cqw`,
-              '--muck-y': `${-seatPoint.y}cqw`,
+              left: tableWidth / 2 + seatPoint.x,
+              top: tableHeight / 2 + seatPoint.y,
+              width: frameWidth,
+              '--card-x': `${cardPoint.x - seatPoint.x}px`,
+              '--card-y': `${cardPoint.y - seatPoint.y}px`,
+              '--chip-x': `${chipPoint.x - seatPoint.x}px`,
+              '--chip-y': `${chipPoint.y - seatPoint.y}px`,
+              '--muck-x': `${-seatPoint.x}px`,
+              '--muck-y': `${-seatPoint.y}px`,
             } as CSSProperties;
             return (
-              <div className="seat-node" key={player.id} style={seatStyle}>
+              <div
+                className={`seat-node ${side ? 'side-seat' : ''}`}
+                key={player.id}
+                style={seatStyle}
+              >
                 <PlayerCard
                   room={room}
                   player={player}
@@ -1068,6 +1155,42 @@ function TableView({
           </div>
         </section>
       )}
+      {showPots && hand && (
+        <>
+          <button
+            className="player-popover-backdrop"
+            aria-label="关闭底池明细"
+            onClick={() => setShowPots(false)}
+          />
+          <section
+            className="player-popover pot-details"
+            role="dialog"
+            aria-modal="true"
+            aria-label="底池明细"
+          >
+            <header>
+              <strong>底池明细</strong>
+              <button aria-label="关闭" onClick={() => setShowPots(false)}>
+                <X size={20} />
+              </button>
+            </header>
+            {hand.pots.map((pot, index) => (
+              <article key={pot.id}>
+                <div>
+                  <b>{index === 0 ? '主池' : `边池 ${index}`}</b>
+                  <strong>{amount(pot.amount)}</strong>
+                </div>
+                <p>
+                  {pot.eligibleIds
+                    .map((id) => room.participants.find((item) => item.id === id)?.name)
+                    .join(' / ')}
+                </p>
+              </article>
+            ))}
+            {hand.uncalled && <p>待跟：{amount(hand.uncalled.amount)}</p>}
+          </section>
+        </>
+      )}
       {selectedPlayer && (
         <PlayerDetailPopover
           room={room}
@@ -1086,6 +1209,50 @@ function TableView({
   );
 }
 
+function SeatMoveControls({
+  room,
+  player,
+  busy,
+  command,
+}: {
+  room: RoomView;
+  player: Participant;
+  busy: boolean;
+  command: ReturnType<typeof usePoker>['command'];
+}) {
+  const seated = room.participants
+    .filter((item) => item.active && item.seat !== null)
+    .sort((a, b) => a.seat! - b.seat!);
+  const index = seated.findIndex((item) => item.id === player.id);
+  const canMove = index >= 0 && seated.length > 1;
+  return (
+    <div className="seat-move-controls" aria-label={`${player.name} 的换位操作`}>
+      {(['left', 'right'] as const).map((direction) => {
+        const offset = direction === 'left' ? 1 : -1;
+        const neighbor = canMove ? seated[(index + offset + seated.length) % seated.length] : null;
+        const label = direction === 'left' ? '左移' : '右移';
+        return (
+          <button
+            className="secondary"
+            key={direction}
+            disabled={busy || !canMove}
+            aria-label={
+              neighbor ? `${player.name} ${label}，越过 ${neighbor.name}` : `${label}，没有相邻玩家`
+            }
+            onClick={() => void command({ type: 'move-seat', participantId: player.id, direction })}
+          >
+            {direction === 'left' ? <ArrowLeft size={16} /> : <ArrowRight size={16} />}
+            <span>
+              <b>{label}</b>
+              <small>{neighbor ? `越过 ${neighbor.name}` : '没有相邻玩家'}</small>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function CashGameControls({
   room,
   busy,
@@ -1096,18 +1263,9 @@ function CashGameControls({
   command: ReturnType<typeof usePoker>['command'];
 }) {
   const self = room.participants.find((item) => item.id === room.me.participantId);
-  const [refillAmount, setRefillAmount] = useState(room.config.defaultRefill);
-  const occupiedSeats = new Set(
-    room.participants
-      .filter((item) => item.id !== self?.id && item.active && item.seat !== null)
-      .map((item) => item.seat as number),
-  );
-  const availableSeats = Array.from({ length: 10 }, (_, seat) => seat).filter(
-    (seat) => !occupiedSeats.has(seat),
-  );
-  const preferredSeat = self?.seat ?? availableSeats[0] ?? 0;
-  const [targetSeat, setTargetSeat] = useState(preferredSeat);
-  const selectedSeat = availableSeats.includes(targetSeat) ? targetSeat : preferredSeat;
+  const [expanded, setExpanded] = useState<'refill' | 'seat' | null>(null);
+  const [refillText, setRefillText] = useState(String(room.config.defaultRefill));
+  const refillAmount = Number(refillText);
   const refillValid =
     Number.isSafeInteger(refillAmount) &&
     refillAmount > 0 &&
@@ -1116,101 +1274,97 @@ function CashGameControls({
   if (!self)
     return (
       <section className="card cash-controls">
-        <div>
-          <p className="eyebrow">我的牌桌操作</p>
-          <h2>加入牌桌</h2>
-          <p className="muted">加入后获得 {amount(room.config.initialStack)} 筹码。</p>
-        </div>
         <button
           className="primary"
           disabled={busy || room.participants.filter((item) => item.active).length >= 10}
           onClick={() => void command({ type: 'seat-member', memberId: room.me.memberId })}
         >
-          <Users size={18} /> 加入牌桌
+          <Users size={16} /> 加入牌桌 · {amount(room.config.initialStack)} 筹码
         </button>
       </section>
     );
 
   const seated = self.active && self.seat !== null;
+  const tableFull =
+    room.participants.filter((item) => item.active && item.seat !== null).length >= 10;
   return (
-    <section className="card cash-controls">
-      <div className="cash-controls-heading">
-        <div>
-          <p className="eyebrow">我的牌桌操作</p>
-          <h2>{seated ? `${self.seat! + 1} 号位` : '旁观中'}</h2>
-        </div>
-        <strong>{amount(self.stack)}</strong>
-      </div>
-      <div className="cash-control-grid">
-        <label>
-          补充筹码
-          <input
-            type="number"
-            inputMode="numeric"
-            min={room.config.chipUnit}
-            step={room.config.chipUnit}
-            value={refillAmount}
-            onChange={(event) => setRefillAmount(Number(event.target.value))}
-          />
-        </label>
+    <section className="card cash-controls" aria-label="我的牌桌操作">
+      <div className="cash-toolbar">
         <button
-          className="secondary"
-          disabled={busy || !refillValid}
-          onClick={() =>
-            void command({ type: 'refill', participantId: self.id, amount: refillAmount })
-          }
+          className={`secondary ${expanded === 'refill' ? 'selected' : ''}`}
+          aria-expanded={expanded === 'refill'}
+          aria-controls="cash-refill-options"
+          onClick={() => setExpanded(expanded === 'refill' ? null : 'refill')}
         >
-          <Coins size={18} /> 补充
+          <Coins size={16} /> 补充
+        </button>
+        {seated && (
+          <button
+            className={`secondary ${expanded === 'seat' ? 'selected' : ''}`}
+            aria-expanded={expanded === 'seat'}
+            aria-controls="cash-seat-options"
+            onClick={() => setExpanded(expanded === 'seat' ? null : 'seat')}
+          >
+            <ArrowLeftRight size={16} /> 换位
+          </button>
+        )}
+        <button
+          className="cash-seat-toggle"
+          disabled={busy || (!seated && (self.stack === 0 || tableFull))}
+          title={!seated && self.stack === 0 ? '请先补充筹码' : undefined}
+          onClick={async () => {
+            if (
+              await command({
+                type: 'set-participant-active',
+                participantId: self.id,
+                active: !seated,
+              })
+            )
+              setExpanded(null);
+          }}
+        >
+          {seated ? <Eye size={16} /> : <Users size={16} />}
+          {seated ? '旁观' : '入座'}
         </button>
       </div>
-      {seated && (
-        <div className="cash-control-grid">
-          <label>
-            更换空座
-            <select
-              value={selectedSeat}
-              onChange={(event) => setTargetSeat(Number(event.target.value))}
-            >
-              {availableSeats.map((seat) => (
-                <option key={seat} value={seat}>
-                  {seat + 1} 号位{seat === self.seat ? '（当前）' : ''}
-                </option>
-              ))}
-            </select>
+      {expanded === 'refill' && (
+        <form
+          id="cash-refill-options"
+          className="cash-expanded"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (
+              !busy &&
+              refillValid &&
+              (await command({ type: 'refill', participantId: self.id, amount: refillAmount }))
+            )
+              setExpanded(null);
+          }}
+        >
+          <label htmlFor="cash-refill-amount">
+            补充筹码 <span>当前 {amount(self.stack)}</span>
           </label>
-          <button
-            className="secondary"
-            disabled={busy || selectedSeat === self.seat}
-            onClick={() =>
-              void command({ type: 'change-seat', participantId: self.id, seat: selectedSeat })
-            }
-          >
-            确认换座
-          </button>
+          <div className="cash-control-grid">
+            <input
+              id="cash-refill-amount"
+              type="number"
+              inputMode="numeric"
+              min={room.config.chipUnit}
+              step={room.config.chipUnit}
+              value={refillText}
+              onChange={(event) => setRefillText(event.target.value)}
+            />
+            <button className="primary" disabled={busy || !refillValid}>
+              确认补充
+            </button>
+          </div>
+        </form>
+      )}
+      {expanded === 'seat' && seated && (
+        <div id="cash-seat-options" className="cash-expanded">
+          <SeatMoveControls room={room} player={self} busy={busy} command={command} />
         </div>
       )}
-      <button
-        className="cash-seat-toggle"
-        disabled={busy || (!seated && self.stack === 0)}
-        title={!seated && self.stack === 0 ? '请先补充筹码' : undefined}
-        onClick={() =>
-          void command({
-            type: 'set-participant-active',
-            participantId: self.id,
-            active: !seated,
-          })
-        }
-      >
-        {seated ? (
-          <>
-            <Eye size={18} /> 转为旁观
-          </>
-        ) : (
-          <>
-            <Users size={18} /> 加入牌桌
-          </>
-        )}
-      </button>
     </section>
   );
 }
@@ -1370,6 +1524,7 @@ function ManageView({
   const [correctionAmount, setCorrectionAmount] = useState(room.config.chipUnit);
   const [voidReason, setVoidReason] = useState('发牌或操作有误');
   const [ownerTarget, setOwnerTarget] = useState('');
+  const [movingPlayerId, setMovingPlayerId] = useState<string | null>(null);
   const plannedBlinds = room.nextBlinds ?? room.config.blindLevels[room.blindLevel];
   const [nextSmallBlind, setNextSmallBlind] = useState(plannedBlinds.smallBlind);
   const [nextBigBlind, setNextBigBlind] = useState(plannedBlinds.bigBlind);
@@ -1387,8 +1542,74 @@ function ManageView({
   const betweenHands = !room.hand || ['SETTLED', 'VOIDED'].includes(room.hand.phase);
   const activeMemberIds = new Set(room.members.map((item) => item.id));
   const currentPlayers = room.participants.filter((item) => activeMemberIds.has(item.memberId));
+  const tableFull = currentPlayers.filter((item) => item.active && item.seat !== null).length >= 10;
   return (
     <div className="manage-stack">
+      {room.me.isDealer && (
+        <section className="card seat-management">
+          <h2>玩家与座次</h2>
+          {!betweenHands && <p className="muted">本手结束后可换位或调整入座。</p>}
+          {room.members.map((member) => {
+            const player = currentPlayers.find((item) => item.memberId === member.id);
+            const seated = Boolean(player?.active && player.seat !== null);
+            return (
+              <div className="managed-member" key={member.id}>
+                <div className="managed-member-row">
+                  <div className="manage-player-copy">
+                    <strong>{member.name}</strong>
+                    <small>
+                      {seated ? '在座' : '旁观'}
+                      {player ? ` · ${amount(player.stack)}` : ''}
+                    </small>
+                  </div>
+                  {seated && player && (
+                    <button
+                      className="chip-button"
+                      disabled={busy || !betweenHands}
+                      aria-label={`为 ${member.name} 换位`}
+                      aria-expanded={movingPlayerId === player.id}
+                      onClick={() =>
+                        setMovingPlayerId(movingPlayerId === player.id ? null : player.id)
+                      }
+                    >
+                      换位
+                    </button>
+                  )}
+                  <button
+                    className="chip-button"
+                    disabled={
+                      busy || !betweenHands || (!seated && (player?.stack === 0 || tableFull))
+                    }
+                    aria-label={seated ? `将 ${member.name} 移到旁观席` : `让 ${member.name} 入座`}
+                    onClick={async () => {
+                      const ok = await command(
+                        player
+                          ? {
+                              type: 'set-participant-active',
+                              participantId: player.id,
+                              active: !seated,
+                            }
+                          : { type: 'seat-member', memberId: member.id },
+                      );
+                      if (ok) setMovingPlayerId(null);
+                    }}
+                  >
+                    {seated ? '旁观' : '入座'}
+                  </button>
+                </div>
+                {player && seated && movingPlayerId === player.id && (
+                  <SeatMoveControls
+                    room={room}
+                    player={player}
+                    busy={busy || !betweenHands}
+                    command={command}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </section>
+      )}
       <section className="card">
         <h2>房间与荷官</h2>
         <p className="muted">Button 是牌桌位置；Dealer 是有管理权限的人，两者彼此独立。</p>
@@ -1643,13 +1864,14 @@ function Room({ game, room }: { game: ReturnType<typeof usePoker>; room: RoomVie
   return (
     <main className="shell room-shell">
       <header className="room-header">
-        <div>
-          <h1>
-            <Spade size={20} /> 房间 {room.code}
-          </h1>
-          <p className="eyebrow">
-            {(room.config.mode ?? 'chips') === 'online' ? '线上发牌' : '电子筹码'}
-          </p>
+        <div className="room-identity">
+          <Spade className="room-symbol" size={28} aria-hidden="true" />
+          <div>
+            <h1>房间 {room.code}</h1>
+            <p className="eyebrow">
+              {(room.config.mode ?? 'chips') === 'online' ? '线上发牌' : '电子筹码'}
+            </p>
+          </div>
         </div>
         <div className="header-actions">
           <span
