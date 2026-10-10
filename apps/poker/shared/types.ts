@@ -29,6 +29,7 @@ export interface RoomMember {
   lastActiveAt?: number;
   participantId?: string;
   removedAt?: number;
+  isBot?: boolean;
 }
 
 export interface Participant {
@@ -47,6 +48,7 @@ export interface Participant {
   potsWon: number;
   largestPotShare: number;
   active: boolean;
+  isBot?: boolean;
 }
 
 export interface HandPlayer {
@@ -236,6 +238,8 @@ export type PokerCommand =
   | { type: 'assign-dealer'; memberId: string | null }
   | { type: 'transfer-owner'; memberId: string }
   | { type: 'remove-member'; memberId: string }
+  | { type: 'add-bot' }
+  | { type: 'remove-bot'; participantId: string }
   | { type: 'seat-member'; memberId: string }
   | { type: 'reorder'; participantIds: string[] }
   | { type: 'change-seat'; participantId: string; seat: number }

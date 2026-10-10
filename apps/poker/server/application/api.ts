@@ -34,6 +34,7 @@ import {
   type UserRecord,
 } from '../infrastructure/auth.js';
 import type { Transaction } from '../infrastructure/store.js';
+import { chooseBotAction } from '../domain/bots.js';
 
 interface CommandReceipt {
   id: string;
@@ -47,6 +48,7 @@ interface RoomRecord {
   recentWrites?: { userId: string; at: number }[];
   onlineHand?: OnlineHandSecrets;
   onlineUndo?: Record<string, OnlineHandSecrets | null>;
+  botTurn?: { phaseKey: string; participantId: string; dueAt: number };
 }
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -67,7 +69,7 @@ function actorMemberId(record: RoomRecord, userId: string) {
 }
 
 function advanceOnlineGame(record: RoomRecord, userId: string, now: number) {
-  if (record.state.config.mode !== 'online' || !record.state.hand) return;
+  if (record.state.config.mode !== 'online' || !record.state.hand || record.state.paused) return;
   const actorId = actorMemberId(record, userId);
   let guard = 0;
   while (record.state.hand && guard < 3) {
@@ -137,6 +139,90 @@ function advanceOnlineGame(record: RoomRecord, userId: string, now: number) {
     }
     break;
   }
+}
+
+function currentBot(record: RoomRecord) {
+  const { state } = record;
+  if (state.config.mode !== 'online' || state.paused || state.hand?.phase !== 'BETTING')
+    return undefined;
+  return state.members.find(
+    (item) => item.isBot && !item.removedAt && item.participantId === state.hand!.actorId,
+  );
+}
+
+function scheduleBotTurn(record: RoomRecord, now: number) {
+  const bot = currentBot(record);
+  record.botTurn = bot
+    ? { phaseKey: record.state.phaseKey, participantId: bot.participantId!, dueAt: now + 1400 }
+    : undefined;
+}
+
+// Human and bot actions share the same rules, private-deck snapshots and undo path.
+function applyRecordedCommand(
+  record: RoomRecord,
+  userId: string,
+  command: PokerCommand,
+  now: number,
+) {
+  const priorSecret = record.onlineHand ? structuredClone(record.onlineHand) : null;
+  const previousUndoId = record.state.undo.at(-1)?.eventId;
+  const undoTarget = command.type === 'undo' ? previousUndoId : undefined;
+  record.state = applyCommand(record.state, userId, command, now);
+  if (undoTarget && record.onlineUndo && undoTarget in record.onlineUndo) {
+    record.onlineHand = record.onlineUndo[undoTarget]
+      ? structuredClone(record.onlineUndo[undoTarget]!)
+      : undefined;
+    delete record.onlineUndo[undoTarget];
+  } else if (command.type !== 'undo' && record.state.config.mode === 'online') {
+    const nextUndoId = record.state.undo.at(-1)?.eventId;
+    if (nextUndoId && nextUndoId !== previousUndoId) {
+      record.onlineUndo ??= {};
+      record.onlineUndo[nextUndoId] = priorSecret;
+    }
+  }
+  if (record.state.config.mode === 'online' && command.type === 'start-hand' && record.state.hand) {
+    record.onlineHand = createOnlineDeal(record.state.hand);
+    record.state.hand.communityCards = [];
+    record.state.hand.showdownHands = [];
+  }
+  if (command.type !== 'undo') advanceOnlineGame(record, userId, now);
+  if (record.onlineUndo) {
+    const retained = new Set(record.state.undo.map((item) => item.eventId));
+    for (const eventId of Object.keys(record.onlineUndo))
+      if (!retained.has(eventId)) delete record.onlineUndo[eventId];
+  }
+  scheduleBotTurn(record, now);
+}
+
+function botNeedsProgress(record: RoomRecord, now: number) {
+  const bot = currentBot(record);
+  return Boolean(
+    bot &&
+    (!record.botTurn ||
+      record.botTurn.phaseKey !== record.state.phaseKey ||
+      record.botTurn.participantId !== bot.participantId ||
+      now >= record.botTurn.dueAt),
+  );
+}
+
+function progressBot(record: RoomRecord, now: number) {
+  const bot = currentBot(record);
+  if (!bot || !botNeedsProgress(record, now)) return false;
+  if (
+    !record.botTurn ||
+    record.botTurn.phaseKey !== record.state.phaseKey ||
+    record.botTurn.participantId !== bot.participantId
+  ) {
+    scheduleBotTurn(record, now);
+    return true;
+  }
+  const cards = record.onlineHand?.holeCards[bot.participantId!];
+  if (record.onlineHand?.handId !== record.state.hand?.id || cards?.length !== 2)
+    throw new PokerError('INTERNAL', '机器人底牌缺失');
+  // The policy receives only this bot's cards; deck order and opponents' cards stay private.
+  const action = chooseBotAction(record.state, bot.participantId!, cards);
+  applyRecordedCommand(record, bot.userId, action, now);
+  return true;
 }
 
 function active(record: RoomRecord | null, now: number) {
@@ -257,6 +343,11 @@ function validateCommand(value: unknown): asserts value is PokerCommand {
     case 'set-participant-active':
       validateEntityId(command.participantId, '玩家');
       if (typeof command.active !== 'boolean') throw new PokerError('INVALID', '入座状态无效');
+      break;
+    case 'add-bot':
+      break;
+    case 'remove-bot':
+      validateEntityId(command.participantId, '机器人');
       break;
     case 'set-blind-level':
       if (!Number.isSafeInteger(command.level) || Number(command.level) < 0)
@@ -412,6 +503,17 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
   if (input.action === 'get') {
     const record = active(await deps.store.get<RoomRecord>('rooms', input.code), now);
     const view = projectRecord(record, claims.userId);
+    if (botNeedsProgress(record, now)) {
+      return deps.store.transaction(async (transaction) => {
+        const latest = active(await transaction.get<RoomRecord>('rooms', input.code), now);
+        actorMemberId(latest, claims.userId);
+        if (progressBot(latest, now)) await saveRoom(transaction, latest);
+        const result = projectRecord(latest, claims.userId);
+        return input.version === result.version
+          ? { unchanged: true, version: result.version }
+          : result;
+      });
+    }
     if (input.version === view.version) return { unchanged: true, version: view.version };
     return view;
   }
@@ -421,6 +523,7 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
       const record = active(await transaction.get<RoomRecord>('rooms', input.code), now);
       roomRate(record, claims.userId, now);
       record.state = touchRoomActivity(record.state, claims.userId, now);
+      progressBot(record, now);
       await saveRoom(transaction, record);
       const view = projectRecord(record, claims.userId);
       if (input.version === view.version) return { unchanged: true, version: view.version };
@@ -445,35 +548,7 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
       )
         throw new PokerError('CONFLICT', '牌局已更新，请同步后重试');
       const command = input.command as PokerCommand;
-      const priorSecret = record.onlineHand ? structuredClone(record.onlineHand) : null;
-      const undoTarget = command.type === 'undo' ? record.state.undo.at(-1)?.eventId : undefined;
-      const undoLength = record.state.undo.length;
-      record.state = applyCommand(record.state, claims.userId, command, now);
-      if (undoTarget && record.onlineUndo && undoTarget in record.onlineUndo) {
-        record.onlineHand = record.onlineUndo[undoTarget]
-          ? structuredClone(record.onlineUndo[undoTarget]!)
-          : undefined;
-        delete record.onlineUndo[undoTarget];
-      } else if (record.state.config.mode === 'online' && record.state.undo.length > undoLength) {
-        const eventId = record.state.undo.at(-1)!.eventId;
-        record.onlineUndo ??= {};
-        record.onlineUndo[eventId] = priorSecret;
-      }
-      if (
-        record.state.config.mode === 'online' &&
-        command.type === 'start-hand' &&
-        record.state.hand
-      ) {
-        record.onlineHand = createOnlineDeal(record.state.hand);
-        record.state.hand.communityCards = [];
-        record.state.hand.showdownHands = [];
-      }
-      advanceOnlineGame(record, claims.userId, now);
-      if (record.onlineUndo) {
-        const retained = new Set(record.state.undo.map((item) => item.eventId));
-        for (const eventId of Object.keys(record.onlineUndo))
-          if (!retained.has(eventId)) delete record.onlineUndo[eventId];
-      }
+      applyRecordedCommand(record, claims.userId, command, now);
       record.receipts.push({ id: input.requestId, userId: claims.userId, digest: hash });
       record.receipts = record.receipts.slice(-512);
       await saveRoom(transaction, record);

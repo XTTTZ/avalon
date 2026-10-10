@@ -1594,6 +1594,37 @@ select {
   display: grid;
   gap: 12px;
 }
+.management-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.add-bot-button,
+.bot-remove-button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+}
+.bot-management-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.bot-management-actions .chip-button {
+  min-height: 44px;
+  font-size: 12px;
+}
+.bot-remove-button {
+  border-radius: 8px;
+  color: var(--red);
+  padding: 6px 9px;
+}
 .tool-row {
   display: flex;
   flex-wrap: wrap;
@@ -1865,6 +1896,15 @@ select {
 :root[data-theme='dark'] .connection {
   background: #2a3831;
 }
+:root[data-theme='dark'] .connection.online {
+  background: #63bb90;
+}
+:root[data-theme='dark'] .connection.offline {
+  background: #ed958e;
+}
+:root[data-theme='dark'] .connection.connecting {
+  background: #dfac56;
+}
 :root[data-theme='dark'] .banner,
 :root[data-theme='dark'] .pending-banner {
   color: #f0c77e;
@@ -1920,6 +1960,17 @@ select {
 :root[data-theme='dark'] .status {
   color: #b8c5be;
   background: #29342e;
+}
+:root[data-theme='dark'] .status.allin {
+  color: #ffe5c7;
+  background: #714525;
+}
+:root[data-theme='dark'] .status.turn {
+  color: #b4e3cd;
+  background: #2a5641;
+}
+:root[data-theme='dark'] .positive {
+  color: #9dd9ba;
 }
 :root[data-theme='dark'] .status.fold,
 :root[data-theme='dark'] .list-fold {

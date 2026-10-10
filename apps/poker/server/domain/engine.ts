@@ -130,10 +130,6 @@ function activeSeats(room: RoomState) {
     .sort((a, b) => a.seat! - b.seat!);
 }
 
-function activePlayerMembers(room: RoomState) {
-  return room.members.filter((item) => !item.removedAt && item.participantId);
-}
-
 function handParticipant(room: RoomState, id: string) {
   const value = room.hand?.players.find((item) => item.participantId === id);
   if (!value) throw new PokerError('NOT_FOUND', '本手玩家不存在');
@@ -288,14 +284,11 @@ export function joinRoom(
     existing.lastActiveAt = now;
     existing.name = cleanName;
     if (existing.participantId) {
-      if (as === 'player')
-        invalid(
-          activePlayerMembers(room).filter((item) => item.id !== existing.id).length < 10,
-          '牌桌座位已满',
-        );
       const returning = participant(room, existing.participantId);
       returning.name = cleanName;
-      returning.active = as === 'player' && betweenHands(room);
+      const canSeat = as === 'player' && betweenHands(room) && returning.stack > 0;
+      if (canSeat) invalid(activeSeats(room).length < 10, '牌桌座位已满');
+      returning.active = canSeat;
       if (returning.active && returning.seat === null) {
         const used = new Set(
           room.participants
@@ -336,9 +329,9 @@ export function joinRoom(
   memberRecord.lastActiveAt = now;
   if (!existing) room.members.push(memberRecord);
   if (as === 'player') {
-    invalid(activePlayerMembers(room).length < 10, '牌桌座位已满');
     const participantId = randomUUID();
-    const canSeat = !room.hand || ['SETTLED', 'VOIDED'].includes(room.hand.phase);
+    const canSeat = betweenHands(room);
+    if (canSeat) invalid(activeSeats(room).length < 10, '牌桌座位已满');
     const used = new Set(
       room.participants
         .filter((item) => item.active)
@@ -1155,6 +1148,15 @@ export function applyCommand(
       );
       for (const reverted of revertedEvents) reverted.revertedBy = undone.id;
       room.events = currentEvents;
+      if (
+        isOnline(room) &&
+        !room.paused &&
+        room.hand?.phase === 'BETTING' &&
+        room.participants.some((item) => item.id === room.hand?.actorId && item.isBot)
+      ) {
+        room.paused = true;
+        event(room, actor.id, 'SESSION_PAUSED', '已暂停，避免机器人立即重复刚撤销的操作', {}, now);
+      }
       break;
     }
     case 'void-hand':
@@ -1178,11 +1180,11 @@ export function applyCommand(
       break;
     case 'assign-dealer':
       assertOwner(room, actor.id);
-      if (command.memberId !== null)
-        invalid(
-          room.members.some((item) => item.id === command.memberId && !item.removedAt),
-          '成员不存在',
-        );
+      if (command.memberId !== null) {
+        const target = room.members.find((item) => item.id === command.memberId && !item.removedAt);
+        invalid(target, '成员不存在');
+        invalid(!target.isBot, '机器人不能担任荷官');
+      }
       before = snapshot(room);
       room.dealerMemberId = command.memberId;
       primary = event(
@@ -1201,10 +1203,88 @@ export function applyCommand(
       invalid(command.memberId !== actor.id, '你已经是房主');
       const target = room.members.find((item) => item.id === command.memberId && !item.removedAt);
       invalid(target, '成员不存在');
+      invalid(!target.isBot, '机器人不能担任房主');
       before = snapshot(room);
       room.ownerMemberId = target.id;
       if (room.dealerMemberId === target.id) room.dealerMemberId = null;
       primary = event(room, actor.id, 'OWNER_CHANGED', `房主转移给 ${target.name}`, {}, now);
+      break;
+    }
+    case 'add-bot': {
+      assertAdmin(room, actor.id);
+      invalid(isOnline(room), '仅线上模式支持机器人');
+      invalid(betweenHands(room), '请在两手之间添加机器人');
+      invalid(activeSeats(room).length < 10, '牌桌座位已满');
+      invalid(room.members.filter((item) => !item.removedAt).length < 32, '房间人数已满');
+      const usedNames = new Set(room.members.map((item) => normalizeName(item.name).toLowerCase()));
+      let number = 1;
+      while (usedNames.has(`机器人 ${number}`)) number += 1;
+      const name = `机器人 ${number}`;
+      const usedSeats = new Set(activeSeats(room).map((item) => item.seat));
+      let seat = 0;
+      while (usedSeats.has(seat)) seat += 1;
+      const memberId = randomUUID();
+      const participantId = randomUUID();
+      before = snapshot(room);
+      room.members.push({
+        id: memberId,
+        userId: `bot:${randomUUID()}`,
+        name,
+        joinedAt: now,
+        lastActiveAt: now,
+        participantId,
+        isBot: true,
+      });
+      room.participants.push({
+        id: participantId,
+        memberId,
+        name,
+        seat,
+        stack: room.config.initialStack,
+        initialChips: room.config.initialStack,
+        refillCount: 0,
+        refillTotal: 0,
+        rebuyCount: 0,
+        rebuyTotal: 0,
+        externalAdjustment: 0,
+        handsPlayed: 0,
+        potsWon: 0,
+        largestPotShare: 0,
+        active: true,
+        isBot: true,
+      });
+      primary = event(
+        room,
+        actor.id,
+        'MEMBER_JOINED',
+        `${actor.name} 添加了 ${name}`,
+        { participantId },
+        now,
+      );
+      ledger(room, primary.id, participantId, 'INITIAL', room.config.initialStack, now);
+      break;
+    }
+    case 'remove-bot': {
+      assertAdmin(room, actor.id);
+      invalid(isOnline(room), '仅线上模式支持机器人');
+      invalid(betweenHands(room), '请在两手之间移除机器人');
+      const targetPlayer = participant(room, command.participantId);
+      const target = room.members.find(
+        (item) => item.id === targetPlayer.memberId && !item.removedAt,
+      );
+      invalid(target && target.isBot && targetPlayer.isBot, '机器人不存在');
+      before = snapshot(room);
+      targetPlayer.active = false;
+      targetPlayer.seat = null;
+      target.removedAt = now;
+      primary = event(
+        room,
+        actor.id,
+        'MEMBER_REMOVED',
+        `${actor.name} 移除了 ${target.name}，账务记录已保留`,
+        { participantId: targetPlayer.id },
+        now,
+      );
       break;
     }
     case 'remove-member': {

@@ -279,6 +279,213 @@ describe('Pots and settlement', () => {
   });
 });
 
+describe('Online bot membership', () => {
+  function onlineRoom(count = 1) {
+    const room = roomWithPlayers(count);
+    room.config.mode = 'online';
+    return room;
+  }
+
+  it('adds bots with unique names, private identities, initial chips and reversible membership', () => {
+    let room = onlineRoom();
+    room = joinRoom(room, 'named-human', '机器人 1', 'spectator', 1100);
+    const originalMembers = structuredClone(room.members);
+    const originalParticipants = structuredClone(room.participants);
+    const originalLedger = structuredClone(room.ledger);
+    room = applyCommand(room, 'user-1', { type: 'add-bot' }, 1200);
+    const bot = room.participants.at(-1)!;
+    const botMember = room.members.find((item) => item.id === bot.memberId)!;
+    expect(bot).toMatchObject({
+      name: '机器人 2',
+      isBot: true,
+      active: true,
+      seat: 1,
+      stack: 2000,
+    });
+    expect(botMember).toMatchObject({ isBot: true, participantId: bot.id });
+    expect(botMember.userId).toMatch(/^bot:/);
+    expect(room.ledger.at(-1)).toMatchObject({
+      participantId: bot.id,
+      type: 'INITIAL',
+      amount: 2000,
+    });
+    const publicMember = projectRoom(room, 'user-1').members.find((item) => item.isBot)!;
+    expect(publicMember).toMatchObject({ id: bot.memberId, isBot: true });
+    expect(publicMember).not.toHaveProperty('userId');
+    room = applyCommand(room, 'user-1', { type: 'undo' }, 1300);
+    expect(room.members.map(({ lastActiveAt: _lastActiveAt, ...item }) => item)).toEqual(
+      originalMembers.map(({ lastActiveAt: _lastActiveAt, ...item }) => item),
+    );
+    expect(room.participants).toEqual(originalParticipants);
+    expect(room.ledger).toEqual(originalLedger);
+    expect(room.events.find((item) => item.participantId === bot.id)?.revertedBy).toBeDefined();
+  });
+
+  it('retains removed bot balances and audit records and can undo removal', () => {
+    let room = applyCommand(onlineRoom(), 'user-1', { type: 'add-bot' }, 1100);
+    const botId = room.participants.at(-1)!.id;
+    room = applyCommand(
+      room,
+      'user-1',
+      { type: 'refill', participantId: botId, amount: 500 },
+      1200,
+    );
+    const botBefore = structuredClone(room.participants.find((item) => item.id === botId)!);
+    const ledgerBefore = structuredClone(room.ledger);
+    room = applyCommand(room, 'user-1', { type: 'remove-bot', participantId: botId }, 1300);
+    expect(room.participants.find((item) => item.id === botId)).toMatchObject({
+      active: false,
+      seat: null,
+      stack: 2500,
+      initialChips: 2000,
+      refillTotal: 500,
+    });
+    expect(room.ledger).toEqual(ledgerBefore);
+    expect(room.members.find((item) => item.id === botBefore.memberId)?.removedAt).toBe(1300);
+    expect(projectRoom(room, 'user-1').members.some((item) => item.id === botBefore.memberId)).toBe(
+      false,
+    );
+    room = applyCommand(room, 'user-1', { type: 'undo' }, 1400);
+    expect(room.participants.find((item) => item.id === botId)).toEqual(botBefore);
+    expect(room.members.find((item) => item.id === botBefore.memberId)?.removedAt).toBeUndefined();
+    room = applyCommand(room, 'user-1', { type: 'remove-bot', participantId: botId }, 1500);
+    room = applyCommand(room, 'user-1', { type: 'add-bot' }, 1600);
+    expect(room.participants.at(-1)?.name).toBe('机器人 2');
+    expect(room.participants.reduce((sum, item) => sum + item.stack, 0)).toBe(6500);
+  });
+
+  it('allows spectator dealers to manage bots and rejects ordinary players or human targets', () => {
+    let room = onlineRoom(2);
+    room = joinRoom(room, 'dealer', '荷官', 'spectator', 1100);
+    const dealer = room.members.find((item) => item.userId === 'dealer')!;
+    room = applyCommand(room, 'user-1', { type: 'assign-dealer', memberId: dealer.id }, 1200);
+    room = applyCommand(room, 'dealer', { type: 'add-bot' }, 1300);
+    const botId = room.participants.at(-1)!.id;
+    expect(() => applyCommand(room, 'user-2', { type: 'add-bot' })).toThrow('需要房主或荷官权限');
+    expect(() =>
+      applyCommand(room, 'user-2', { type: 'remove-bot', participantId: botId }),
+    ).toThrow('需要房主或荷官权限');
+    expect(() =>
+      applyCommand(room, 'dealer', { type: 'remove-bot', participantId: room.participants[0].id }),
+    ).toThrow('机器人不存在');
+    room = applyCommand(room, 'dealer', { type: 'remove-bot', participantId: botId }, 1400);
+    expect(room.participants.find((item) => item.id === botId)?.active).toBe(false);
+  });
+
+  it('restricts bots to online rooms between hands and never grants them room control', () => {
+    const chipsRoom = roomWithPlayers(1);
+    expect(() => applyCommand(chipsRoom, 'user-1', { type: 'add-bot' })).toThrow('仅线上模式');
+    expect(() =>
+      applyCommand(chipsRoom, 'user-1', {
+        type: 'remove-bot',
+        participantId: chipsRoom.participants[0].id,
+      }),
+    ).toThrow('仅线上模式');
+    let room = applyCommand(onlineRoom(), 'user-1', { type: 'add-bot' }, 1100);
+    const bot = room.participants.at(-1)!;
+    expect(() =>
+      applyCommand(room, 'user-1', { type: 'assign-dealer', memberId: bot.memberId }),
+    ).toThrow('机器人不能担任荷官');
+    expect(() =>
+      applyCommand(room, 'user-1', { type: 'transfer-owner', memberId: bot.memberId }),
+    ).toThrow('机器人不能担任房主');
+    expect(() =>
+      applyCommand(room, 'user-1', {
+        type: 'configure',
+        config: { ...room.config, mode: 'chips' },
+      }),
+    ).toThrow('房间创建后不能切换牌局模式');
+    room = start(room);
+    expect(() => applyCommand(room, 'user-1', { type: 'add-bot' })).toThrow(
+      '请在两手之间添加机器人',
+    );
+    expect(() =>
+      applyCommand(room, 'user-1', { type: 'remove-bot', participantId: bot.id }),
+    ).toThrow('请在两手之间移除机器人');
+  });
+
+  it('enforces ten seated players and thirty-two current members, releasing capacity on removal', () => {
+    let room = onlineRoom();
+    for (let i = 0; i < 9; i++) room = applyCommand(room, 'user-1', { type: 'add-bot' }, 1100 + i);
+    expect(() => applyCommand(room, 'user-1', { type: 'add-bot' })).toThrow('牌桌座位已满');
+    room = applyCommand(
+      room,
+      'user-1',
+      { type: 'remove-bot', participantId: room.participants[4].id },
+      1200,
+    );
+    room = applyCommand(room, 'user-1', { type: 'add-bot' }, 1300);
+    expect(room.participants.at(-1)?.seat).toBe(4);
+    let crowded = onlineRoom();
+    for (let i = 0; i < 30; i++)
+      crowded = joinRoom(crowded, `spectator-${i}`, `旁观${i}`, 'spectator', 1100 + i);
+    crowded = applyCommand(crowded, 'user-1', { type: 'add-bot' }, 1200);
+    expect(() => applyCommand(crowded, 'user-1', { type: 'add-bot' })).toThrow('房间人数已满');
+    crowded = applyCommand(
+      crowded,
+      'user-1',
+      { type: 'remove-bot', participantId: crowded.participants.at(-1)!.id },
+      1300,
+    );
+    expect(() => applyCommand(crowded, 'user-1', { type: 'add-bot' }, 1400)).not.toThrow();
+  });
+
+  it('counts seated players rather than spectator accounts when humans join or return', () => {
+    let room = onlineRoom(10);
+    const departing = room.participants[1];
+    room = applyCommand(
+      room,
+      'user-1',
+      { type: 'remove-member', memberId: departing.memberId },
+      1100,
+    );
+    for (const player of room.participants.slice(2))
+      room = applyCommand(
+        room,
+        'user-1',
+        { type: 'set-participant-active', participantId: player.id, active: false },
+        1200,
+      );
+    room = applyCommand(room, 'user-1', { type: 'add-bot' }, 1300);
+    room = joinRoom(room, 'user-2', '玩家2', 'player', 1400);
+    room = joinRoom(room, 'new-human', '新玩家', 'player', 1500);
+    expect(room.participants.filter((item) => item.active && item.seat !== null)).toHaveLength(4);
+    room = applyCommand(
+      room,
+      'user-1',
+      { type: 'remove-member', memberId: departing.memberId },
+      1600,
+    );
+    forceStack(room, departing.id, 0);
+    room = joinRoom(room, 'user-2', '玩家2', 'player', 1700);
+    expect(room.participants.find((item) => item.id === departing.id)).toMatchObject({
+      active: false,
+      seat: null,
+    });
+  });
+
+  it('pauses an undo that restores a bot turn so the bot cannot immediately replay it', () => {
+    let room = applyCommand(onlineRoom(), 'user-1', { type: 'add-bot' }, 1100);
+    const bot = room.participants.at(-1)!;
+    const botUser = memberUser(room, bot.id);
+    room = start(room, bot.id);
+    expect(room.hand!.actorId).toBe(bot.id);
+    const before = structuredClone(room.hand);
+    room = applyCommand(room, botUser, { type: 'act', action: 'call' }, 2100);
+    room = applyCommand(room, 'user-1', { type: 'undo' }, 2200);
+    expect(room.hand).toMatchObject({ actorId: bot.id, currentBet: before!.currentBet });
+    expect(room.hand!.players).toEqual(before!.players);
+    expect(room.paused).toBe(true);
+    expect(room.events.slice(-2).map((item) => item.type)).toEqual([
+      'ACTION_UNDONE',
+      'SESSION_PAUSED',
+    ]);
+    expect(legalActions(room, bot.id)).toBeNull();
+    room = applyCommand(room, 'user-1', { type: 'resume' }, 2300);
+    expect(legalActions(room, bot.id)?.actions).toContain('call');
+  });
+});
+
 describe('Permissions and correction', () => {
   it('moves left and right past the neighboring player, preserving gaps and other seats', () => {
     let room = roomWithPlayers(4);

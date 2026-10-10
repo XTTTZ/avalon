@@ -175,7 +175,11 @@ export function usePoker() {
       () => {
         if (!document.hidden && navigator.onLine && roomRef.current) void sync(undefined, true);
       },
-      room?.hand && !['SETTLED', 'VOIDED'].includes(room.hand.phase) ? 3500 : 10_000,
+      room?.hand && !['SETTLED', 'VOIDED'].includes(room.hand.phase)
+        ? room.participants.some((item) => item.id === room.hand?.actorId && item.isBot)
+          ? 1600
+          : 3500
+        : 10_000,
     );
     const reconnect = () => {
       if (!document.hidden && navigator.onLine) void sync();
@@ -189,7 +193,7 @@ export function usePoker() {
       window.removeEventListener('pageshow', reconnect);
       document.removeEventListener('visibilitychange', reconnect);
     };
-  }, [room?.hand?.phase, sync]);
+  }, [room?.hand?.phase, room?.hand?.actorId, sync]);
 
   const create = useCallback(
     async (name: string, config: GameConfig) => {

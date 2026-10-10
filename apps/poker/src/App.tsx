@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowLeftRight,
+  Bot,
   Check,
   CirclePause,
   CirclePlay,
@@ -33,6 +34,12 @@ import {
   type SettlementChoice,
 } from '../shared/types';
 import { usePoker } from './api/client';
+import {
+  CollectingChips,
+  CommunityCardMotion,
+  useTableAnimations,
+  type TableAnimations,
+} from './tableAnimations';
 
 const amount = (value: number) => String(value);
 type Theme = 'light' | 'dark';
@@ -154,13 +161,15 @@ function PlayingCard({
   );
 }
 
-function CommunityCards({ room }: { room: RoomView }) {
+function CommunityCards({ room, animation }: { room: RoomView; animation?: TableAnimations }) {
   if ((room.config.mode ?? 'chips') !== 'online' || !room.hand) return null;
   const cards = room.online?.communityCards ?? room.hand.communityCards ?? [];
   return (
     <div className="community-cards" aria-label="公共牌">
       {Array.from({ length: 5 }, (_, index) => (
-        <PlayingCard code={cards[index]} compact key={`board-${index}`} />
+        <CommunityCardMotion key={`board-${index}`} index={index} animation={animation}>
+          <PlayingCard code={cards[index]} compact />
+        </CommunityCardMotion>
       ))}
     </div>
   );
@@ -551,7 +560,13 @@ function ActionBar({
     return (
       <div className="action-bar waiting">
         <span>
-          {room.paused ? '牌局已暂停' : actor ? `等待 ${actor.name} 行动` : '等待荷官操作'}
+          {room.paused
+            ? '牌局已暂停'
+            : actor?.isBot
+              ? `${actor.name} 正在思考…`
+              : actor
+                ? `等待 ${actor.name} 行动`
+                : '等待荷官操作'}
         </span>
       </div>
     );
@@ -896,7 +911,15 @@ function OnlineShowdown({ room }: { room: RoomView }) {
   );
 }
 
-function PotSummary({ room, onShowPots }: { room: RoomView; onShowPots?: () => void }) {
+function PotSummary({
+  room,
+  onShowPots,
+  animation,
+}: {
+  room: RoomView;
+  onShowPots?: () => void;
+  animation?: TableAnimations;
+}) {
   const hand = room.hand;
   const hasSidePots = (hand?.pots.length ?? 0) > 1;
   const total = hand?.players.reduce((sum, item) => sum + item.handCommitted, 0) ?? 0;
@@ -928,7 +951,7 @@ function PotSummary({ room, onShowPots }: { room: RoomView; onShowPots?: () => v
           <strong>{amount(total)}</strong>
         </div>
       )}
-      <CommunityCards room={room} />
+      <CommunityCards room={room} animation={animation} />
       {hand && (
         <>
           <div className="center-meta">
@@ -984,15 +1007,18 @@ function PlayerListRow({
   room,
   player,
   onSelect,
+  animation,
 }: {
   room: RoomView;
   player: Participant;
   onSelect: () => void;
+  animation: TableAnimations;
 }) {
   const state = room.hand?.players.find((item) => item.participantId === player.id);
   const acting = room.hand?.actorId === player.id;
   const folded = Boolean(state?.folded);
   const self = room.me.participantId === player.id;
+  const collecting = animation.collecting.find((bet) => bet.participantId === player.id);
   return (
     <button
       type="button"
@@ -1007,7 +1033,14 @@ function PlayerListRow({
         <PositionBadges room={room} id={player.id} />
       </div>
       {folded ? (
-        <span className="list-fold">FOLD</span>
+        <>
+          <span className="list-fold">FOLD</span>
+          {collecting && (
+            <span key={collecting.key} className="list-fold-collecting" aria-hidden="true">
+              {amount(collecting.amount)}
+            </span>
+          )}
+        </>
       ) : (
         <>
           <span className="list-player-state">
@@ -1015,7 +1048,12 @@ function PlayerListRow({
           </span>
           <span className="list-amount">
             <small>本街</small>
-            <b>{amount(state?.streetCommitted ?? 0)}</b>
+            <b>{amount(animation.hideBets ? 0 : (state?.streetCommitted ?? 0))}</b>
+            {collecting && (
+              <b key={collecting.key} className="list-collecting-chip" aria-hidden="true">
+                {amount(collecting.amount)}
+              </b>
+            )}
           </span>
           <span className="list-amount">
             <small>本手</small>
@@ -1040,6 +1078,7 @@ function TableView({
   busy: boolean;
   command: ReturnType<typeof usePoker>['command'];
 }) {
+  const animation = useTableAnimations(room);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [showPots, setShowPots] = useState(false);
   const tableRef = useRef<HTMLElement>(null);
@@ -1054,7 +1093,14 @@ function TableView({
     observer.observe(table);
     return () => observer.disconnect();
   }, [layout]);
-  const seated = [...room.participants]
+  const visibleParticipants = animation.retainedParticipants.length
+    ? animation.retainedParticipants.map((previous) => ({
+        ...(room.participants.find((player) => player.id === previous.id) ?? previous),
+        active: previous.active,
+        seat: previous.seat,
+      }))
+    : room.participants;
+  const seated = [...visibleParticipants]
     .filter((item) => item.active && item.seat !== null)
     .sort((a, b) => a.seat! - b.seat!);
   const selfIndex = seated.findIndex((item) => item.id === room.me.participantId);
@@ -1106,7 +1152,7 @@ function TableView({
         >
           <div className="table-felt">
             <div className="table-center">
-              <PotSummary room={room} onShowPots={() => setShowPots(true)} />
+              <PotSummary room={room} animation={animation} onShowPots={() => setShowPots(true)} />
             </div>
           </div>
           {arranged.map((player, index) => {
@@ -1159,7 +1205,12 @@ function TableView({
                   onSelect={() => setSelectedPlayerId(player.id)}
                 />
                 <SeatCards room={room} player={player} />
-                <SeatBet room={room} player={player} />
+                {!animation.hideBets && <SeatBet room={room} player={player} />}
+                {animation.collecting
+                  .filter((bet) => bet.participantId === player.id)
+                  .map((bet) => (
+                    <CollectingChips key={bet.key} bet={bet} />
+                  ))}
               </div>
             );
           })}
@@ -1167,13 +1218,14 @@ function TableView({
       ) : (
         <section className="player-list-view" aria-label="玩家列表牌桌">
           <div className="list-pot-card">
-            <PotSummary room={room} />
+            <PotSummary room={room} animation={animation} />
           </div>
           <div className="list-players">
             {seated.map((player) => (
               <PlayerListRow
                 room={room}
                 player={player}
+                animation={animation}
                 key={player.id}
                 onSelect={() => setSelectedPlayerId(player.id)}
               />
@@ -1573,7 +1625,18 @@ function ManageView({
     <div className="manage-stack">
       {room.me.isDealer && (
         <section className="card seat-management">
-          <h2>玩家与座次</h2>
+          <div className="management-heading">
+            <h2>玩家与座次</h2>
+            {room.config.mode === 'online' && (
+              <button
+                className="chip-button add-bot-button"
+                disabled={busy || !betweenHands || tableFull || room.members.length >= 32}
+                onClick={() => void command({ type: 'add-bot' })}
+              >
+                <Bot size={16} /> 添加机器人
+              </button>
+            )}
+          </div>
           {!betweenHands && <p className="muted">本手结束后可换位或调整入座。</p>}
           {room.members.map((member) => {
             const player = currentPlayers.find((item) => item.memberId === member.id);
@@ -1584,6 +1647,7 @@ function ManageView({
                   <div className="manage-player-copy">
                     <strong>{member.name}</strong>
                     <small>
+                      {member.isBot ? '机器人 · ' : ''}
                       {seated ? '在座' : '旁观'}
                       {player ? ` · ${amount(player.stack)}` : ''}
                     </small>
@@ -1623,6 +1687,32 @@ function ManageView({
                     {seated ? '旁观' : '入座'}
                   </button>
                 </div>
+                {player?.isBot && (
+                  <div className="bot-management-actions">
+                    <button
+                      className="chip-button"
+                      disabled={busy || !betweenHands}
+                      aria-label={`给 ${member.name} 补充 ${room.config.defaultRefill} 筹码`}
+                      onClick={() =>
+                        void command({
+                          type: 'refill',
+                          participantId: player.id,
+                          amount: room.config.defaultRefill,
+                        })
+                      }
+                    >
+                      补充 {amount(room.config.defaultRefill)}
+                    </button>
+                    <button
+                      className="bot-remove-button"
+                      disabled={busy || !betweenHands}
+                      aria-label={`删除 ${member.name}`}
+                      onClick={() => void command({ type: 'remove-bot', participantId: player.id })}
+                    >
+                      <Trash2 size={14} /> 删除机器人
+                    </button>
+                  </div>
+                )}
                 {player && seated && movingPlayerId === player.id && (
                   <SeatMoveControls
                     room={room}
@@ -1650,7 +1740,7 @@ function ManageView({
             >
               <option value="">仅房主</option>
               {room.members
-                .filter((item) => item.id !== room.ownerMemberId)
+                .filter((item) => item.id !== room.ownerMemberId && !item.isBot)
                 .map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
@@ -1788,7 +1878,7 @@ function ManageView({
             <select value={ownerTarget} onChange={(event) => setOwnerTarget(event.target.value)}>
               <option value="">选择成员</option>
               {room.members
-                .filter((item) => item.id !== room.ownerMemberId)
+                .filter((item) => item.id !== room.ownerMemberId && !item.isBot)
                 .map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
@@ -2007,7 +2097,11 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
-    localStorage.setItem('poker.theme', theme);
+    try {
+      localStorage.setItem('poker.theme', theme);
+    } catch {
+      // The theme can still be changed when persistent storage is unavailable.
+    }
     document
       .querySelector('meta[name="theme-color"]')
       ?.setAttribute('content', theme === 'dark' ? '#0c1511' : '#164b3a');
