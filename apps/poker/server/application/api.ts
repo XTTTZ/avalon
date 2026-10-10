@@ -13,6 +13,7 @@ import {
   joinRoom,
   projectRoom,
   settleOnlineHand,
+  showOnlineCards,
   touchRoomActivity,
   validateConfig,
 } from '../domain/engine.js';
@@ -22,6 +23,7 @@ import {
   createOnlineDeal,
   dealBoardStreet,
   evaluateHoldem,
+  madeHandLabel,
   type OnlineHandSecrets,
 } from '../domain/cards.js';
 import {
@@ -58,7 +60,10 @@ function projectRecord(record: RoomRecord, userId: string) {
   const participantId = record.state.members.find(
     (item) => item.userId === userId && !item.removedAt,
   )?.participantId;
-  const holeCards = participantId ? (record.onlineHand?.holeCards[participantId] ?? []) : [];
+  const holeCards =
+    participantId && record.onlineHand?.handId === record.state.hand?.id
+      ? (record.onlineHand?.holeCards[participantId] ?? [])
+      : [];
   return projectRoom(record.state, userId, holeCards);
 }
 
@@ -126,15 +131,22 @@ function advanceOnlineGame(record: RoomRecord, userId: string, now: number) {
           ],
         };
       });
-      const showdownHands =
-        live.length > 1
-          ? live.map((player) => ({
-              participantId: player.participantId,
-              cards: evaluated.get(player.participantId)!.cards,
-              label: evaluated.get(player.participantId)!.label,
-            }))
-          : [];
-      record.state = settleOnlineHand(record.state, actorId, choices, showdownHands, now);
+      const shownBots = hand.players
+        .filter((player) =>
+          record.state.participants.some(
+            (participant) => participant.id === player.participantId && participant.isBot,
+          ),
+        )
+        .map((player) => {
+          const cards = secrets.holeCards[player.participantId];
+          if (!cards || cards.length !== 2) throw new PokerError('INTERNAL', '机器人底牌缺失');
+          return {
+            participantId: player.participantId,
+            cards: [...cards],
+            label: madeHandLabel(cards, board),
+          };
+        });
+      record.state = settleOnlineHand(record.state, actorId, choices, shownBots, now);
       break;
     }
     break;
@@ -164,6 +176,15 @@ function applyRecordedCommand(
   command: PokerCommand,
   now: number,
 ) {
+  if (command.type === 'show-cards') {
+    const actor = record.state.members.find((item) => item.userId === userId && !item.removedAt);
+    const cards =
+      actor?.participantId && record.onlineHand?.handId === command.handId
+        ? (record.onlineHand.holeCards[actor.participantId] ?? [])
+        : [];
+    record.state = showOnlineCards(record.state, userId, command, cards, now);
+    return;
+  }
   const priorSecret = record.onlineHand ? structuredClone(record.onlineHand) : null;
   const previousUndoId = record.state.undo.at(-1)?.eventId;
   const undoTarget = command.type === 'undo' ? previousUndoId : undefined;
@@ -184,6 +205,7 @@ function applyRecordedCommand(
     record.onlineHand = createOnlineDeal(record.state.hand);
     record.state.hand.communityCards = [];
     record.state.hand.showdownHands = [];
+    record.state.hand.revealedCards = [];
   }
   if (command.type !== 'undo') advanceOnlineGame(record, userId, now);
   if (record.onlineUndo) {
@@ -305,6 +327,17 @@ function validateCommand(value: unknown): asserts value is PokerCommand {
         throw new PokerError('INVALID', '玩家操作无效');
       if (command.to !== undefined && (!Number.isSafeInteger(command.to) || Number(command.to) < 0))
         throw new PokerError('INVALID', '目标金额无效');
+      break;
+    case 'show-cards':
+      validateEntityId(command.handId, '牌局');
+      if (
+        !Array.isArray(command.cardIndexes) ||
+        command.cardIndexes.length < 1 ||
+        command.cardIndexes.length > 2 ||
+        new Set(command.cardIndexes).size !== command.cardIndexes.length ||
+        command.cardIndexes.some((index) => index !== 0 && index !== 1)
+      )
+        throw new PokerError('INVALID', '请选择要秀出的手牌');
       break;
     case 'settle':
     case 'save-settlement':

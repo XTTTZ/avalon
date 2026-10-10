@@ -1,0 +1,221 @@
+.poker-table.hand-metadata {
+  margin-block: 31px 25px;
+}
+
+.player-meta-rail {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 2px);
+  transform: translateX(-50%);
+  width: calc(100% + 4px);
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  line-height: 9px;
+  pointer-events: none;
+}
+
+.seat-node[data-edge='top'] .player-meta-rail {
+  top: auto;
+  bottom: calc(100% + 12px);
+}
+
+.player-meta-rail .status {
+  padding: 0 3px;
+  font-size: 7px;
+  line-height: 9px;
+}
+
+.made-hand-label {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 650;
+  line-height: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.seat-node.has-winner {
+  z-index: 6;
+}
+
+.player-card.table-seat.self.folded {
+  opacity: 0.78;
+}
+
+.player-card.table-seat.winner,
+:root[data-theme='dark'] .player-card.table-seat.winner {
+  color: #513611;
+  border-color: #c39231;
+  background: linear-gradient(150deg, #fff4c6, #edd28a);
+  box-shadow:
+    0 0 0 2px #dbb54d55,
+    0 3px 14px #c6952c45;
+  transform: scale(1.035);
+  animation: winner-arrive 650ms ease-out;
+  opacity: 1;
+  filter: none;
+}
+
+.player-card.table-seat.winner .player-stack strong,
+:root[data-theme='dark'] .player-card.table-seat.winner .player-stack strong {
+  color: #674514;
+}
+
+.win-result {
+  max-width: 100%;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 3px;
+  border-radius: 4px;
+  color: #68450d;
+  background: #f6df9c;
+  font:
+    800 8px/9px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  white-space: nowrap;
+}
+
+.win-result strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hole-card-face,
+.show-card-button {
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
+.show-card-button {
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.show-card-button.showable {
+  outline: 1px dashed #efc76b;
+  outline-offset: 1px;
+}
+
+.show-card-button.public {
+  outline: 2px solid #d6a53d;
+  outline-offset: 0;
+  opacity: 1;
+}
+
+.show-card-button:disabled {
+  opacity: 1;
+}
+
+.show-card-button:focus-visible {
+  outline: 3px solid #e8b644;
+  outline-offset: 2px;
+}
+
+.show-cards-hint {
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.list-player-item > .list-player-row {
+  width: 100%;
+}
+
+.list-player-row.winner,
+:root[data-theme='dark'] .list-player-row.winner {
+  color: #513611;
+  border-color: #c39231;
+  background: #f5e2a8;
+  box-shadow: 0 0 0 2px #dbb54d44;
+  animation: winner-row-arrive 650ms ease-out;
+}
+
+.list-player-row.winner .list-amount b,
+.list-player-row.winner .list-amount small,
+:root[data-theme='dark'] .list-player-row.winner .list-amount b,
+:root[data-theme='dark'] .list-player-row.winner .list-amount small {
+  color: #674514;
+}
+
+.list-player-row.winner .list-player-state,
+:root[data-theme='dark'] .list-player-row.winner .list-player-state {
+  color: #674514;
+  background: #e8c76f;
+}
+
+.list-public-cards,
+.departed-reveal {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 4px 8px;
+}
+
+.list-public-cards small,
+.departed-reveal small {
+  color: var(--muted);
+  font-size: 9px;
+  margin-right: 4px;
+}
+
+.departed-reveals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.departed-reveal > span:first-child {
+  display: grid;
+  gap: 3px;
+  max-width: 100px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+@keyframes winner-arrive {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 #e2bb5466;
+  }
+  45% {
+    transform: scale(1.055);
+    box-shadow: 0 0 0 5px #e2bb5433;
+  }
+  100% {
+    transform: scale(1.035);
+  }
+}
+
+@keyframes winner-row-arrive {
+  from {
+    box-shadow: 0 0 0 0 #e2bb5488;
+  }
+  to {
+    box-shadow: 0 0 0 4px #e2bb5400;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-card.table-seat.winner,
+  :root[data-theme='dark'] .player-card.table-seat.winner,
+  .list-player-row.winner,
+  :root[data-theme='dark'] .list-player-row.winner {
+    animation: none;
+  }
+}

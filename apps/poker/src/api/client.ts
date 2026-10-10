@@ -179,7 +179,9 @@ export function usePoker() {
         ? room.participants.some((item) => item.id === room.hand?.actorId && item.isBot)
           ? 1600
           : 3500
-        : 10_000,
+        : room?.hand?.phase === 'SETTLED' && room.config.mode === 'online'
+          ? 2500
+          : 10_000,
     );
     const reconnect = () => {
       if (!document.hidden && navigator.onLine) void sync();

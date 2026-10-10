@@ -10,6 +10,7 @@ import {
   type PokerCommand,
   type PokerEvent,
   type Pot,
+  type RevealedHand,
   type RoomState,
   type RoomView,
   type SettlementChoice,
@@ -17,6 +18,7 @@ import {
   type Street,
   type UndoSnapshot,
 } from '../../shared/types.js';
+import { madeHandLabel } from './cards.js';
 
 const DAY = 86_400_000;
 const DRAFT_ROOM_TTL = 7 * DAY;
@@ -1013,6 +1015,11 @@ function settle(room: RoomState, actorMemberId: string, choices: SettlementChoic
     ledger(room, settled.id, id, 'PAYOUT', amount, now, hand.id);
   }
   for (const player of hand.players) participant(room, player.participantId).handsPlayed += 1;
+  hand.results = hand.players.map((player) => ({
+    participantId: player.participantId,
+    payout: payouts.get(player.participantId) ?? 0,
+    net: (payouts.get(player.participantId) ?? 0) - player.handCommitted,
+  }));
   hand.settlementDraft = normalized;
   hand.phase = 'SETTLED';
   hand.settledAt = now;
@@ -1097,6 +1104,8 @@ export function applyCommand(
       primary = act(room, actor.id, actor.participantId, command.action, command.to, now);
       break;
     }
+    case 'show-cards':
+      throw new PokerError('INVALID', '秀牌需要线上牌局的私有手牌');
     case 'confirm-street':
       assertAdmin(room, actor.id);
       invalid(!isOnline(room), '线上模式由系统自动发公共牌');
@@ -1146,7 +1155,8 @@ export function applyCommand(
         {},
         now,
       );
-      for (const reverted of revertedEvents) reverted.revertedBy = undone.id;
+      for (const reverted of revertedEvents)
+        if (reverted.type !== 'CARDS_SHOWN') reverted.revertedBy = undone.id;
       room.events = currentEvents;
       if (
         isOnline(room) &&
@@ -1636,22 +1646,111 @@ export function settleOnlineHand(
   source: RoomState,
   actorMemberId: string,
   choices: SettlementChoice[],
-  showdownHands: ShowdownHand[],
+  shownHands: ShowdownHand[],
   now = Date.now(),
 ) {
   const room = copy(source);
   invalid(isOnline(room), '当前房间不是线上模式');
   invalid(room.hand?.phase === 'SHOWDOWN', '当前不能自动结算');
-  room.hand.showdownHands = copy(showdownHands);
+  // Evaluation remains private. Only intentionally revealed cards belong in public state.
+  room.hand.showdownHands = [];
   settle(room, actorMemberId, choices, now);
+  for (const shown of shownHands) revealCards(room, shown.participantId, shown.cards, [0, 1]);
   moveBustedPlayersToSpectators(room, actorMemberId, now);
   assertChipConservation(room);
+  return finish(room, now);
+}
+
+function revealCards(room: RoomState, participantId: string, cards: string[], indexes: number[]) {
+  const hand = room.hand!;
+  const current = hand.revealedCards?.find((item) => item.participantId === participantId);
+  const exposed = current ? [...current.cards] : [null, null];
+  for (const index of indexes) exposed[index] = cards[index];
+  const reveal: RevealedHand = { participantId, cards: exposed };
+  const persist = (target: HandState) => {
+    target.revealedCards = [
+      ...(target.revealedCards ?? []).filter((item) => item.participantId !== participantId),
+      copy(reveal),
+    ];
+  };
+  persist(hand);
+  // Public information cannot become secret when a wager, settlement or refill is undone.
+  // Labels are projected afresh because an undo may restore an earlier public board.
+  for (const frame of room.undo) if (frame.hand?.id === hand.id) persist(frame.hand);
+}
+
+export function showOnlineCards(
+  source: RoomState,
+  userId: string,
+  command: Extract<PokerCommand, { type: 'show-cards' }>,
+  holeCards: string[],
+  now = Date.now(),
+) {
+  const room = copy(source);
+  const actor = member(room, userId);
+  invalid(isOnline(room), '电子筹码模式无需秀牌');
+  invalid(
+    room.hand?.id === command.handId && room.hand.phase === 'SETTLED',
+    '只能秀出刚结束这手的牌',
+  );
+  invalid(
+    actor.participantId &&
+      room.hand.players.some((item) => item.participantId === actor.participantId),
+    '你没有参与这手牌',
+  );
+  invalid(
+    Array.isArray(command.cardIndexes) &&
+      command.cardIndexes.length >= 1 &&
+      command.cardIndexes.length <= 2 &&
+      new Set(command.cardIndexes).size === command.cardIndexes.length &&
+      command.cardIndexes.every((index) => index === 0 || index === 1),
+    '请选择要秀出的手牌',
+  );
+  invalid(holeCards.length === 2, '本手私有手牌缺失');
+  const previous = room.hand.revealedCards?.find(
+    (item) => item.participantId === actor.participantId,
+  );
+  const newlyShown = command.cardIndexes.filter((index) => !previous?.cards[index]);
+  if (!newlyShown.length) return room;
+  revealCards(room, actor.participantId, holeCards, newlyShown);
+  event(
+    room,
+    actor.id,
+    'CARDS_SHOWN',
+    `${actor.name} 秀出 ${newlyShown.length} 张牌`,
+    {
+      participantId: actor.participantId,
+    },
+    now,
+  );
+  actor.lastActiveAt = now;
   return finish(room, now);
 }
 
 export function projectRoom(room: RoomState, userId: string, holeCards: string[] = []): RoomView {
   const self = member(room, userId);
   const { undo: _undo, ledger: _ledger, ...publicRoom } = copy(room);
+  if (isOnline(room) && publicRoom.hand) {
+    const board = publicRoom.hand.communityCards ?? [];
+    publicRoom.hand.revealedCards = (publicRoom.hand.revealedCards ?? []).map((shown) => {
+      const cards = [shown.cards[0] ?? null, shown.cards[1] ?? null];
+      return {
+        participantId: shown.participantId,
+        cards,
+        ...(cards.every((card) => card !== null)
+          ? { label: madeHandLabel(cards as string[], board) }
+          : {}),
+      };
+    });
+    // Keep older clients compatible without exposing any unselected human hole card.
+    publicRoom.hand.showdownHands = publicRoom.hand.revealedCards
+      .filter((shown) => shown.cards.every((card) => card !== null))
+      .map((shown) => ({
+        participantId: shown.participantId,
+        cards: shown.cards as string[],
+        label: shown.label!,
+      }));
+  }
   return {
     ...publicRoom,
     members: publicRoom.members
@@ -1671,6 +1770,9 @@ export function projectRoom(room: RoomState, userId: string, holeCards: string[]
           online: {
             holeCards: [...holeCards],
             communityCards: [...(room.hand?.communityCards ?? [])],
+            ...(holeCards.length === 2
+              ? { handLabel: madeHandLabel(holeCards, room.hand?.communityCards ?? []) }
+              : {}),
           },
         }
       : {}),

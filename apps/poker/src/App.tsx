@@ -149,10 +149,9 @@ function PlayingCard({
   if (!code) return <span className={`playing-card placeholder ${compact ? 'compact' : ''}`} />;
   const rank = code[0] === 'T' ? '10' : code[0];
   const suit = suitInfo[code[1]];
-  const red = code[1] === 'h' || code[1] === 'd';
   return (
     <span
-      className={`playing-card ${red ? 'red' : ''} ${compact ? 'compact' : ''}`}
+      className={`playing-card suit-${code[1]} ${compact ? 'compact' : ''}`}
       aria-label={`${suit?.name ?? ''}${rank}`}
     >
       <b>{rank}</b>
@@ -406,6 +405,22 @@ function PositionBadges({ room, id }: { room: RoomView; id: string }) {
   );
 }
 
+const signedAmount = (value: number) => `${value > 0 ? '+' : ''}${value}`;
+
+function publicCards(room: RoomView, id: string) {
+  return room.hand?.revealedCards?.find((item) => item.participantId === id);
+}
+
+function playerHandLabel(room: RoomView, id: string) {
+  return room.me.participantId === id ? room.online?.handLabel : publicCards(room, id)?.label;
+}
+
+function playerResult(room: RoomView, id: string) {
+  return room.hand?.phase === 'SETTLED'
+    ? room.hand.results?.find((item) => item.participantId === id)
+    : undefined;
+}
+
 function PlayerCard({
   room,
   player,
@@ -418,11 +433,14 @@ function PlayerCard({
   const state = room.hand?.players.find((item) => item.participantId === player.id);
   const acting = room.hand?.actorId === player.id;
   const self = room.me.participantId === player.id;
+  const result = playerResult(room, player.id);
+  const winner = Boolean(result && result.payout > 0);
+  const label = playerHandLabel(room, player.id);
   const status = state?.folded ? 'FOLD' : state?.allIn ? 'ALL-IN' : !player.active ? '暂停' : '';
   return (
     <button
       type="button"
-      className={`player-card table-seat ${acting ? 'acting' : ''} ${state?.folded ? 'folded' : ''} ${self ? 'self' : ''}`}
+      className={`player-card table-seat ${acting ? 'acting' : ''} ${state?.folded ? 'folded' : ''} ${self ? 'self' : ''} ${winner ? 'winner' : ''}`}
       aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}，本街下注 ${amount(state?.streetCommitted ?? 0)}${acting ? '，行动中' : ''}${status ? `，${status}` : ''}`}
       aria-haspopup="dialog"
       onClick={onSelect}
@@ -436,39 +454,107 @@ function PlayerCard({
           <strong>{amount(player.stack)}</strong>
         </div>
       </div>
-      <div className="player-state-slot">
-        {status && (
-          <span className={`status ${state?.folded ? 'fold' : ''} ${state?.allIn ? 'allin' : ''}`}>
-            {status}
+      <div className="player-meta-rail">
+        {winner && result ? (
+          <span
+            className="win-result"
+            aria-label={`赢得底池，本手净收益 ${signedAmount(result.net)}`}
+          >
+            <b>WIN</b>
+            <strong>{signedAmount(result.net)}</strong>
           </span>
+        ) : (
+          status && (
+            <span
+              className={`status ${state?.folded ? 'fold' : ''} ${state?.allIn ? 'allin' : ''}`}
+            >
+              {status}
+            </span>
+          )
+        )}
+        {label && (
+          <small className="made-hand-label" title={label}>
+            {label}
+          </small>
         )}
       </div>
     </button>
   );
 }
 
-function SeatCards({ room, player }: { room: RoomView; player: Participant }) {
+function HoleCardFaces({
+  room,
+  player,
+  busy,
+  command,
+  compact = true,
+}: {
+  room: RoomView;
+  player: Participant;
+  busy: boolean;
+  command: ReturnType<typeof usePoker>['command'];
+  compact?: boolean;
+}) {
+  const self = room.me.participantId === player.id;
+  const shown = publicCards(room, player.id)?.cards ?? [];
+  const cards = self ? (room.online?.holeCards ?? []) : shown;
+  const canShow = self && room.hand?.phase === 'SETTLED' && cards.length === 2;
+  return (
+    <>
+      {[0, 1].map((index) => {
+        const face = (
+          <PlayingCard code={cards[index] ?? undefined} compact={compact} hidden={!cards[index]} />
+        );
+        return canShow ? (
+          <button
+            key={index}
+            type="button"
+            className={`show-card-button ${shown[index] ? 'public' : 'showable'}`}
+            disabled={busy || Boolean(shown[index])}
+            aria-label={
+              shown[index] ? `第 ${index + 1} 张底牌已公开` : `秀出第 ${index + 1} 张底牌`
+            }
+            aria-pressed={Boolean(shown[index])}
+            onClick={() =>
+              void command({ type: 'show-cards', handId: room.hand!.id, cardIndexes: [index] })
+            }
+          >
+            {face}
+          </button>
+        ) : (
+          <span className="hole-card-face" key={index}>
+            {face}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+function SeatCards({
+  room,
+  player,
+  busy,
+  command,
+}: {
+  room: RoomView;
+  player: Participant;
+  busy: boolean;
+  command: ReturnType<typeof usePoker>['command'];
+}) {
   const hand = room.hand;
   const state = hand?.players.find((item) => item.participantId === player.id);
   if ((room.config.mode ?? 'chips') !== 'online' || !hand || !state) return null;
-  const showdown = hand.showdownHands?.find((item) => item.participantId === player.id);
-  const ownCards = room.me.participantId === player.id ? (room.online?.holeCards ?? []) : [];
-  const visibleCards = showdown?.cards ?? ownCards;
-  const hidden = visibleCards.length !== 2;
+  const own = room.me.participantId === player.id;
+  const shown = publicCards(room, player.id)?.cards ?? [];
+  const visible = own || shown.some(Boolean);
   return (
     <div
-      className={`seat-hole-cards ${state.folded ? 'folded' : ''}`}
+      className={`seat-hole-cards ${state.folded && !visible ? 'folded' : ''} ${own ? 'own' : ''}`}
       key={`${hand.id}-${player.id}`}
-      aria-label={hidden ? `${player.name} 的底牌` : `${player.name} 的底牌已显示`}
+      aria-label={`${player.name} 的底牌`}
     >
-      {[0, 1].map((index) => (
-        <PlayingCard
-          code={visibleCards[index]}
-          compact
-          hidden={hidden}
-          key={`${player.id}-card-${index}`}
-        />
-      ))}
+      <HoleCardFaces room={room} player={player} busy={busy} command={command} />
     </div>
   );
 }
@@ -847,65 +933,31 @@ function Showdown({
   );
 }
 
-function OnlineHoleCards({ room }: { room: RoomView }) {
+function OnlineHoleCards({
+  room,
+  busy,
+  command,
+}: {
+  room: RoomView;
+  busy: boolean;
+  command: ReturnType<typeof usePoker>['command'];
+}) {
   if ((room.config.mode ?? 'chips') !== 'online' || !room.hand) return null;
-  if (['SETTLED', 'VOIDED'].includes(room.hand.phase)) return null;
+  if (room.hand.phase === 'VOIDED') return null;
   const cards = room.online?.holeCards ?? [];
-  if (cards.length !== 2) return null;
-  const result = room.hand.showdownHands?.find(
-    (item) => item.participantId === room.me.participantId,
-  );
+  const player = room.participants.find((item) => item.id === room.me.participantId);
+  if (cards.length !== 2 || !player) return null;
+  const shown = publicCards(room, player.id)?.cards.filter(Boolean).length ?? 0;
   return (
     <section className="hole-card-bar" aria-label="你的底牌">
       <span>
-        <small>你的手牌</small>
-        {result && <b>{result.label}</b>}
+        <small>
+          {room.hand.phase === 'SETTLED' ? (shown === 2 ? '已秀两张' : '点底牌秀出') : '你的手牌'}
+        </small>
+        <b>{room.online?.handLabel}</b>
       </span>
       <div>
-        {cards.map((card) => (
-          <PlayingCard code={card} key={card} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function OnlineShowdown({ room }: { room: RoomView }) {
-  const hands = room.hand?.showdownHands ?? [];
-  if ((room.config.mode ?? 'chips') !== 'online' || hands.length === 0) return null;
-  const winners = new Set(
-    room.hand!.settlementDraft.flatMap((choice) =>
-      (choice.runs?.length ? choice.runs : [{ winnerIds: choice.winnerIds ?? [] }]).flatMap(
-        (run) => run.winnerIds,
-      ),
-    ),
-  );
-  return (
-    <section className="card online-showdown">
-      <div>
-        <p className="eyebrow">Showdown</p>
-        <h2>系统已自动结算</h2>
-      </div>
-      <div className="revealed-hands">
-        {hands.map((hand) => {
-          const player = room.participants.find((item) => item.id === hand.participantId);
-          return (
-            <article
-              className={winners.has(hand.participantId) ? 'winner' : ''}
-              key={hand.participantId}
-            >
-              <span>
-                <strong>{player?.name ?? '玩家'}</strong>
-                <small>{hand.label}</small>
-              </span>
-              <div>
-                {hand.cards.map((card) => (
-                  <PlayingCard code={card} compact key={card} />
-                ))}
-              </div>
-            </article>
-          );
-        })}
+        <HoleCardFaces room={room} player={player} busy={busy} command={command} compact={false} />
       </div>
     </section>
   );
@@ -1019,10 +1071,12 @@ function PlayerListRow({
   const folded = Boolean(state?.folded);
   const self = room.me.participantId === player.id;
   const collecting = animation.collecting.find((bet) => bet.participantId === player.id);
+  const result = playerResult(room, player.id);
+  const winner = Boolean(result && result.payout > 0);
   return (
     <button
       type="button"
-      className={`list-player-row ${acting ? 'acting' : ''} ${folded ? 'folded' : ''} ${self ? 'self' : ''}`}
+      className={`list-player-row ${acting ? 'acting' : ''} ${folded ? 'folded' : ''} ${self ? 'self' : ''} ${winner ? 'winner' : ''}`}
       aria-label={`${(player.seat ?? 0) + 1}号位 ${player.name}${folded ? '，已 Fold' : ''}`}
       aria-haspopup="dialog"
       onClick={onSelect}
@@ -1044,11 +1098,15 @@ function PlayerListRow({
       ) : (
         <>
           <span className="list-player-state">
-            {state?.allIn ? 'ALL-IN' : acting ? '行动中' : ''}
+            {winner ? 'WIN' : state?.allIn ? 'ALL-IN' : acting ? '行动中' : ''}
           </span>
           <span className="list-amount">
-            <small>本街</small>
-            <b>{amount(animation.hideBets ? 0 : (state?.streetCommitted ?? 0))}</b>
+            <small>{result ? '净赢' : '本街'}</small>
+            <b>
+              {result
+                ? signedAmount(result.net)
+                : amount(animation.hideBets ? 0 : (state?.streetCommitted ?? 0))}
+            </b>
             {collecting && (
               <b key={collecting.key} className="list-collecting-chip" aria-hidden="true">
                 {amount(collecting.amount)}
@@ -1109,6 +1167,18 @@ function TableView({
   const hand = room.hand;
   const betweenHands = !hand || ['SETTLED', 'VOIDED'].includes(hand.phase);
   const online = (room.config.mode ?? 'chips') === 'online';
+  const selfSeated = seated.some((player) => player.id === room.me.participantId);
+  const departedReveals =
+    hand?.phase === 'SETTLED'
+      ? room.participants.filter(
+          (player) =>
+            player.id !== room.me.participantId &&
+            !seated.some((seat) => seat.id === player.id) &&
+            publicCards(room, player.id)?.cards.some(Boolean),
+        )
+      : [];
+  const ownShownCount =
+    publicCards(room, room.me.participantId ?? '')?.cards.filter(Boolean).length ?? 0;
   const compactTable = Boolean(room.legalActions);
   const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
   const dense = arranged.length >= 7;
@@ -1139,7 +1209,7 @@ function TableView({
       </div>
       {layout === 'table' ? (
         <section
-          className={`poker-table ${online ? 'online-mode' : ''} ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
+          className={`poker-table ${online ? 'online-mode hand-metadata' : ''} ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
           aria-label="牌桌与玩家座位"
           ref={tableRef}
           style={
@@ -1195,7 +1265,8 @@ function TableView({
             } as CSSProperties;
             return (
               <div
-                className={`seat-node ${side ? 'side-seat' : ''}`}
+                className={`seat-node ${side ? 'side-seat' : ''} ${(playerResult(room, player.id)?.payout ?? 0) > 0 ? 'has-winner' : ''}`}
+                data-edge={slot.edge}
                 key={player.id}
                 style={seatStyle}
               >
@@ -1204,7 +1275,7 @@ function TableView({
                   player={player}
                   onSelect={() => setSelectedPlayerId(player.id)}
                 />
-                <SeatCards room={room} player={player} />
+                <SeatCards room={room} player={player} busy={busy} command={command} />
                 {!animation.hideBets && <SeatBet room={room} player={player} />}
                 {animation.collecting
                   .filter((bet) => bet.participantId === player.id)
@@ -1222,13 +1293,21 @@ function TableView({
           </div>
           <div className="list-players">
             {seated.map((player) => (
-              <PlayerListRow
-                room={room}
-                player={player}
-                animation={animation}
-                key={player.id}
-                onSelect={() => setSelectedPlayerId(player.id)}
-              />
+              <div className="list-player-item" key={player.id}>
+                <PlayerListRow
+                  room={room}
+                  player={player}
+                  animation={animation}
+                  onSelect={() => setSelectedPlayerId(player.id)}
+                />
+                {player.id !== room.me.participantId &&
+                  publicCards(room, player.id)?.cards.some(Boolean) && (
+                    <div className="list-public-cards">
+                      <small>{playerHandLabel(room, player.id)}</small>
+                      <HoleCardFaces room={room} player={player} busy={busy} command={command} />
+                    </div>
+                  )}
+              </div>
             ))}
           </div>
         </section>
@@ -1276,8 +1355,35 @@ function TableView({
           onClose={() => setSelectedPlayerId(null)}
         />
       )}
-      {layout === 'list' && <OnlineHoleCards room={room} />}
-      <OnlineShowdown room={room} />
+      {(layout === 'list' || !selfSeated) && (
+        <OnlineHoleCards room={room} busy={busy} command={command} />
+      )}
+      {layout === 'table' &&
+        selfSeated &&
+        online &&
+        hand?.phase === 'SETTLED' &&
+        room.online?.holeCards.length === 2 && (
+          <p className="show-cards-hint">
+            {ownShownCount === 2
+              ? '两张底牌已公开'
+              : ownShownCount === 1
+                ? '已秀一张 · 点另一张继续秀牌'
+                : '点自己的底牌秀出 · 可选一张或两张'}
+          </p>
+        )}
+      {departedReveals.length > 0 && (
+        <div className="departed-reveals" aria-label="本手离席玩家秀牌">
+          {departedReveals.map((player) => (
+            <div className="departed-reveal" key={player.id}>
+              <span>
+                <b>{player.name}</b>
+                <small>{playerHandLabel(room, player.id)}</small>
+              </span>
+              <HoleCardFaces room={room} player={player} busy={busy} command={command} />
+            </div>
+          ))}
+        </div>
+      )}
       {!online && <DealerPrompt room={room} busy={busy} command={command} />}
       {!online && <Showdown room={room} busy={busy} command={command} />}
       {betweenHands && <CashGameControls room={room} busy={busy} command={command} />}

@@ -441,9 +441,6 @@ select {
   font-size: 19px;
   font-style: normal;
 }
-.playing-card.red {
-  color: #bd3131;
-}
 .playing-card.compact {
   width: 25px;
   height: 34px;
@@ -744,23 +741,6 @@ select {
   margin: 0;
   display: flex;
   align-items: center;
-}
-.player-state-slot {
-  position: absolute;
-  right: 3px;
-  top: calc(100% + 1px);
-  height: 10px;
-  max-width: 100%;
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.player-state-slot .status {
-  padding: 1px 3px;
-  font-size: 7px;
-  line-height: 8px;
-  white-space: nowrap;
 }
 .seat-hole-cards,
 .seat-bet {
@@ -1138,47 +1118,6 @@ select {
 .hole-card-bar > div {
   display: flex;
   gap: 5px;
-}
-.online-showdown {
-  display: grid;
-  gap: 12px;
-}
-.revealed-hands {
-  display: grid;
-  gap: 6px;
-}
-.revealed-hands article {
-  min-height: 48px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #f6f8f6;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.revealed-hands article.winner {
-  border-color: #d8b768;
-  background: #fff8e4;
-}
-.revealed-hands article > span {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-.revealed-hands article strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.revealed-hands article small {
-  color: var(--muted);
-}
-.revealed-hands article > div {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 4px;
 }
 .prompt-stats {
   width: 100%;
@@ -2034,13 +1973,6 @@ select {
   border-color: #385044;
   background: rgba(20, 31, 26, 0.97);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
-}
-:root[data-theme='dark'] .revealed-hands article {
-  background: #19241f;
-}
-:root[data-theme='dark'] .revealed-hands article.winner {
-  border-color: #8c7136;
-  background: #302918;
 }
 :root[data-theme='dark'] .winner-grid button.selected {
   border-color: #54a77d;

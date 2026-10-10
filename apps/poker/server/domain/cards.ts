@@ -114,12 +114,14 @@ export function compareScores(left: number[], right: number[]) {
   return 0;
 }
 
-export function evaluateHoldem(cards: string[]): EvaluatedHand {
-  if (
-    cards.length !== 7 ||
-    cards.some((card) => !RANKS.includes(card[0]) || !SUITS.includes(card[1]))
-  )
-    throw new Error('Invalid Holdem cards');
+function validCards(cards: string[]) {
+  return (
+    new Set(cards).size === cards.length &&
+    cards.every((card) => card.length === 2 && RANKS.includes(card[0]) && SUITS.includes(card[1]))
+  );
+}
+
+function bestFiveCards(cards: string[]): EvaluatedHand {
   let best: EvaluatedHand | null = null;
   for (let first = 0; first < cards.length - 4; first += 1)
     for (let second = first + 1; second < cards.length - 3; second += 1)
@@ -136,4 +138,18 @@ export function evaluateHoldem(cards: string[]): EvaluatedHand {
             if (!best || compareScores(result.score, best.score) > 0) best = result;
           }
   return best!;
+}
+
+export function evaluateHoldem(cards: string[]): EvaluatedHand {
+  if (cards.length !== 7 || !validCards(cards)) throw new Error('Invalid Holdem cards');
+  return bestFiveCards(cards);
+}
+
+// Describe only the cards already available at the table; never complete a future board.
+export function madeHandLabel(holeCards: string[], communityCards: string[]): string {
+  const cards = [...holeCards, ...communityCards];
+  if (holeCards.length !== 2 || ![0, 3, 4, 5].includes(communityCards.length) || !validCards(cards))
+    throw new Error('Invalid visible Holdem cards');
+  if (communityCards.length === 0) return holeCards[0][0] === holeCards[1][0] ? '一对' : '高牌';
+  return bestFiveCards(cards).label;
 }

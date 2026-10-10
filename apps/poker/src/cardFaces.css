@@ -1,0 +1,72 @@
+/* Keep the card footprint fixed while giving rank and suit their own rows. */
+.playing-card:not(.card-back):not(.placeholder) {
+  --rank-size: 20px;
+  --rank-top: 2px;
+  --rank-left: 3px;
+  --suit-size: 27px;
+  position: relative;
+  display: block;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.playing-card:not(.card-back):not(.placeholder) b,
+.seat-hole-cards .playing-card.compact b,
+.poker-table.dense .seat-hole-cards .playing-card.compact b {
+  position: absolute;
+  top: var(--rank-top);
+  left: var(--rank-left);
+  font-size: var(--rank-size);
+  font-weight: 850;
+  line-height: 1;
+  letter-spacing: -0.06em;
+}
+
+.playing-card:not(.card-back):not(.placeholder) i,
+.seat-hole-cards .playing-card.compact i,
+.poker-table.dense .seat-hole-cards .playing-card.compact i {
+  position: absolute;
+  right: 1px;
+  bottom: 0;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: var(--suit-size);
+  font-style: normal;
+  line-height: 1;
+}
+
+.playing-card.compact:not(.card-back):not(.placeholder) {
+  --rank-size: 14px;
+  --rank-top: 0px;
+  --rank-left: 2px;
+  --suit-size: 17px;
+}
+
+.seat-hole-cards .playing-card.compact:not(.card-back):not(.placeholder) {
+  --rank-size: 18px;
+  --rank-top: 1px;
+  --rank-left: 2px;
+  --suit-size: 21px;
+}
+
+.poker-table.dense .seat-hole-cards .playing-card.compact:not(.card-back):not(.placeholder) {
+  --rank-size: 16px;
+  --rank-top: 0px;
+  --suit-size: 20px;
+}
+
+/* The white faces and four ink colors remain the same in both themes. */
+.playing-card.suit-s {
+  color: #19231f;
+}
+
+.playing-card.suit-h {
+  color: #b82a3c;
+}
+
+.playing-card.suit-d {
+  color: #1d5fba;
+}
+
+.playing-card.suit-c {
+  color: #167340;
+}

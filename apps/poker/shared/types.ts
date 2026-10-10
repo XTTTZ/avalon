@@ -82,6 +82,18 @@ export interface ShowdownHand {
   label: string;
 }
 
+export interface RevealedHand {
+  participantId: string;
+  cards: (string | null)[];
+  label?: string;
+}
+
+export interface HandResult {
+  participantId: string;
+  payout: number;
+  net: number;
+}
+
 export interface HandState {
   id: string;
   number: number;
@@ -103,6 +115,8 @@ export interface HandState {
   settlementDraft: SettlementChoice[];
   communityCards?: string[];
   showdownHands?: ShowdownHand[];
+  revealedCards?: RevealedHand[];
+  results?: HandResult[];
   startedAt: number;
   settledAt?: number;
   revision: number;
@@ -126,6 +140,7 @@ export type EventType =
   | 'STREET_READY'
   | 'STREET_CONFIRMED'
   | 'HAND_SETTLED'
+  | 'CARDS_SHOWN'
   | 'HAND_VOIDED'
   | 'CHIPS_ADDED'
   | 'CHIPS_ADJUSTED'
@@ -222,12 +237,14 @@ export interface RoomView extends Omit<RoomState, 'undo' | 'ledger' | 'members'>
   online?: {
     holeCards: string[];
     communityCards: string[];
+    handLabel?: string;
   };
 }
 
 export type PokerCommand =
   | { type: 'start-hand'; buttonId?: string }
   | { type: 'act'; action: PlayerAction; to?: number }
+  | { type: 'show-cards'; handId: string; cardIndexes: number[] }
   | { type: 'confirm-street' }
   | { type: 'settle'; pots: SettlementChoice[] }
   | { type: 'save-settlement'; pots: SettlementChoice[] }
