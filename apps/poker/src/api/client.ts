@@ -90,10 +90,21 @@ export function usePoker() {
   sessionRef.current = session;
   roomRef.current = room;
 
-  const roomClosed = useCallback(() => {
-    if (roomRef.current) closedRoomIds.current.add(roomRef.current.id);
+  const roomClosed = useCallback((closed: { code: string; id?: string }) => {
+    if (closed.id) closedRoomIds.current.add(closed.id);
+    const current = roomRef.current;
+    const savedCode = read<string>(KEY_ROOM);
+    const matchesCurrent = current
+      ? closed.id
+        ? current.id === closed.id
+        : current.code === closed.code
+      : savedCode === closed.code;
+    // An old room's delayed response must not close a newly joined room.
+    if (!matchesCurrent || (savedCode && savedCode !== closed.code)) return;
+    if (current) closedRoomIds.current.add(current.id);
     localStorage.removeItem(KEY_ROOM);
-    localStorage.removeItem(KEY_PENDING);
+    if (read<Pending>(KEY_PENDING)?.request.code === closed.code)
+      localStorage.removeItem(KEY_PENDING);
     roomRef.current = null;
     setRoom(null);
     setConnection('online');
@@ -103,8 +114,7 @@ export function usePoker() {
   const accept = useCallback(
     (view: RoomView) => {
       if (view.dissolvedAt) {
-        closedRoomIds.current.add(view.id);
-        roomClosed();
+        roomClosed({ id: view.id, code: view.code });
         return;
       }
       if (closedRoomIds.current.has(view.id)) return;
@@ -168,7 +178,7 @@ export function usePoker() {
         else setConnection('online');
       } catch (syncError) {
         if (syncError instanceof ClientError && syncError.code === 'ROOM_CLOSED') {
-          roomClosed();
+          roomClosed({ code: roomCode });
           return;
         }
         if (syncError instanceof ClientError && syncError.code === 'NOT_FOUND') {
@@ -287,7 +297,7 @@ export function usePoker() {
         return true;
       } catch (commandError) {
         if (commandError instanceof ClientError && commandError.code === 'ROOM_CLOSED') {
-          roomClosed();
+          roomClosed({ code: request.code });
           return false;
         }
         if (commandError instanceof ClientError && commandError.code !== 'NETWORK')
@@ -314,7 +324,7 @@ export function usePoker() {
       return true;
     } catch (pendingError) {
       if (pendingError instanceof ClientError && pendingError.code === 'ROOM_CLOSED') {
-        roomClosed();
+        roomClosed({ code: pending.request.code });
         return false;
       }
       if (pendingError instanceof ClientError && pendingError.code !== 'NETWORK')
