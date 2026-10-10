@@ -101,7 +101,12 @@ function event(
 }
 
 function roomTtl(room: RoomState) {
+  if (room.dissolvedAt !== undefined) return DRAFT_ROOM_TTL;
   return room.hand || room.completedHands > 0 ? ACTIVE_ROOM_TTL : DRAFT_ROOM_TTL;
+}
+
+function assertRoomOpen(room: RoomState) {
+  if (room.dissolvedAt !== undefined) throw new PokerError('ROOM_CLOSED', '房主已解散房间');
 }
 
 function finish(room: RoomState, now: number) {
@@ -264,6 +269,7 @@ export function joinRoom(
   as: 'player' | 'spectator',
   now = Date.now(),
 ) {
+  assertRoomOpen(source);
   const room = copy(source);
   const existing = room.members.find((item) => item.userId === userId);
   const cleanName = normalizeName(name);
@@ -932,7 +938,7 @@ function confirmStreet(room: RoomState, actorMemberId: string, now: number) {
   return confirmed;
 }
 
-function normalizedChoices(hand: HandState, choices: SettlementChoice[]) {
+function normalizedChoices(hand: HandState, choices: SettlementChoice[], allowEmptyRuns = false) {
   invalid(choices.length === hand.pots.length, '请为每个底池指定赢家');
   return hand.pots.map((pot) => {
     const choice = choices.find((item) => item.potId === pot.id);
@@ -942,7 +948,10 @@ function normalizedChoices(hand: HandState, choices: SettlementChoice[]) {
       : choice.winnerIds?.length
         ? [{ winnerIds: choice.winnerIds }]
         : [];
-    invalid(rawRuns.length > 0 && rawRuns.length <= Math.min(5, pot.amount), '跑马次数无效');
+    invalid(
+      rawRuns.length > 0 && rawRuns.length <= (allowEmptyRuns ? 5 : Math.min(5, pot.amount)),
+      '跑马次数无效',
+    );
     const runs = rawRuns.map((run) => {
       invalid(run.winnerIds.length > 0, '每次跑马至少选择一位赢家');
       const unique = [...new Set(run.winnerIds)];
@@ -960,7 +969,7 @@ function normalizedChoices(hand: HandState, choices: SettlementChoice[]) {
 function settle(room: RoomState, actorMemberId: string, choices: SettlementChoice[], now: number) {
   const hand = room.hand;
   invalid(hand?.phase === 'SHOWDOWN' && !room.paused, '当前不能结算');
-  const normalized = normalizedChoices(hand, choices);
+  const normalized = normalizedChoices(hand, choices, isOnline(room));
   const seatOrder = [...hand.players]
     .sort((a, b) => a.seat - b.seat)
     .map((item) => item.participantId);
@@ -972,19 +981,23 @@ function settle(room: RoomState, actorMemberId: string, choices: SettlementChoic
   const shares = new Map<string, number>();
   for (const pot of hand.pots) {
     const runs = normalized.find((item) => item.potId === pot.id)!.runs;
-    const baseRunAmount = Math.floor(pot.amount / runs.length);
-    let extraRuns = pot.amount % runs.length;
+    // Preserve old hands with off-denomination amounts while keeping new splits
+    // in whole configured chips whenever the pot allows it.
+    const chipUnit = pot.amount % room.config.chipUnit === 0 ? room.config.chipUnit : 1;
+    const potUnits = pot.amount / chipUnit;
+    const baseRunUnits = Math.floor(potUnits / runs.length);
+    let extraRuns = potUnits % runs.length;
     const potPayouts = new Map<string, number>();
     for (const run of runs) {
-      const runAmount = baseRunAmount + (extraRuns > 0 ? 1 : 0);
+      const runUnits = baseRunUnits + (extraRuns > 0 ? 1 : 0);
       if (extraRuns > 0) extraRuns -= 1;
-      const each = Math.floor(runAmount / run.winnerIds.length);
-      let remainder = runAmount % run.winnerIds.length;
+      const each = Math.floor(runUnits / run.winnerIds.length) * chipUnit;
+      let remainder = runUnits % run.winnerIds.length;
       for (const id of run.winnerIds) potPayouts.set(id, (potPayouts.get(id) ?? 0) + each);
       for (const id of oddOrder) {
         if (remainder === 0) break;
         if (run.winnerIds.includes(id)) {
-          potPayouts.set(id, (potPayouts.get(id) ?? 0) + 1);
+          potPayouts.set(id, (potPayouts.get(id) ?? 0) + chipUnit);
           remainder -= 1;
         }
       }
@@ -1008,6 +1021,7 @@ function settle(room: RoomState, actorMemberId: string, choices: SettlementChoic
     now,
   );
   for (const [id, amount] of payouts) {
+    if (amount <= 0) continue;
     const owner = participant(room, id);
     owner.stack += amount;
     owner.potsWon += 1;
@@ -1088,6 +1102,7 @@ export function applyCommand(
   command: PokerCommand,
   now = Date.now(),
 ) {
+  assertRoomOpen(source);
   const room = copy(source);
   const actor = member(room, userId);
   let before: UndoSnapshot | null = null;
@@ -1106,6 +1121,84 @@ export function applyCommand(
     }
     case 'show-cards':
       throw new PokerError('INVALID', '秀牌需要线上牌局的私有手牌');
+    case 'propose-runouts':
+    case 'agree-runouts':
+    case 'reject-runouts':
+    case 'finish-runouts': {
+      const hand = room.hand;
+      invalid(
+        isOnline(room) &&
+          hand?.id === command.handId &&
+          hand.phase === 'RUNOUT_DECISION' &&
+          hand.runout,
+        '当前没有等待确认的跑马',
+      );
+      invalid(!room.paused, '请先继续牌局');
+      const decision = hand.runout;
+      const isEligible = Boolean(
+        actor.participantId && decision.eligibleIds.includes(actor.participantId) && !actor.isBot,
+      );
+      const isAdmin = actor.id === room.ownerMemberId || actor.id === room.dealerMemberId;
+      if (command.type === 'agree-runouts') {
+        if (!isEligible) throw new PokerError('FORBIDDEN', '只有本手未弃牌的玩家可以同意跑马');
+        before = snapshot(room);
+        decision.approvedIds = [...new Set([...decision.approvedIds, actor.participantId!])];
+        primary = event(
+          room,
+          actor.id,
+          'RUNOUT_AGREED',
+          `${actor.name} 同意跑 ${decision.proposedRuns} 次`,
+          { participantId: actor.participantId },
+          now,
+        );
+      } else if (command.type === 'finish-runouts') {
+        assertAdmin(room, actor.id);
+        invalid(
+          decision.proposedRuns === 1 ||
+            decision.eligibleIds.every((id) => decision.approvedIds.includes(id)),
+          '需要所有未弃牌玩家同意多次跑马',
+        );
+        before = snapshot(room);
+        hand.phase = 'AWAITING_STREET_CONFIRMATION';
+        primary = event(
+          room,
+          actor.id,
+          'RUNOUT_CONFIRMED',
+          `荷官确认跑 ${decision.proposedRuns} 次`,
+          {},
+          now,
+        );
+      } else {
+        if (!isEligible && !isAdmin)
+          throw new PokerError('FORBIDDEN', '需要本手未弃牌玩家、房主或荷官权限');
+        const runs = command.type === 'reject-runouts' ? 1 : command.runs;
+        invalid(Number.isInteger(runs) && runs >= 1 && runs <= decision.maxRuns, '跑马次数无效');
+        before = snapshot(room);
+        decision.proposedRuns = runs;
+        decision.approvedIds = decision.eligibleIds.filter(
+          (id) => participant(room, id).isBot || (isEligible && id === actor.participantId),
+        );
+        primary = event(
+          room,
+          actor.id,
+          command.type === 'reject-runouts' ? 'RUNOUT_REJECTED' : 'RUNOUT_PROPOSED',
+          command.type === 'reject-runouts'
+            ? `${actor.name} 选择只跑一次`
+            : `${actor.name} 提议跑 ${runs} 次`,
+          { participantId: actor.participantId },
+          now,
+        );
+      }
+      break;
+    }
+    case 'dissolve-room':
+      assertOwner(room, actor.id);
+      if (!betweenHands(room)) voidHand(room, actor.id, '房主解散房间，退回本手投入', now);
+      room.dissolvedAt = now;
+      room.paused = true;
+      room.undo = [];
+      primary = event(room, actor.id, 'ROOM_DISSOLVED', '房主已解散房间', {}, now);
+      break;
     case 'confirm-street':
       assertAdmin(room, actor.id);
       invalid(!isOnline(room), '线上模式由系统自动发公共牌');
@@ -1615,12 +1708,47 @@ export function applyCommand(
 }
 
 export function touchRoomActivity(source: RoomState, userId: string, now = Date.now()) {
+  assertRoomOpen(source);
   const room = copy(source);
   const activeMember = member(room, userId);
   activeMember.lastActiveAt = now;
   room.lastActiveAt = now;
   room.expiresAt = now + roomTtl(room);
   return room;
+}
+
+export function beginOnlineRunouts(
+  source: RoomState,
+  actorMemberId: string,
+  maxRuns: number,
+  now = Date.now(),
+) {
+  const room = copy(source);
+  assertRoomOpen(room);
+  const hand = room.hand;
+  invalid(
+    isOnline(room) && hand?.phase === 'AWAITING_STREET_CONFIRMATION' && !room.paused,
+    '当前不能协商跑马',
+  );
+  const live = hand.players.filter((player) => !player.folded);
+  invalid(
+    live.length > 1 &&
+      live.filter((player) => canAct(room, player)).length <= 1 &&
+      (hand.communityCards?.length ?? 0) < 5,
+    '当前仍可继续下注',
+  );
+  invalid(Number.isInteger(maxRuns) && maxRuns >= 1 && maxRuns <= 5, '跑马次数无效');
+  hand.phase = 'RUNOUT_DECISION';
+  hand.runout = {
+    maxRuns,
+    proposedRuns: 1,
+    eligibleIds: live.map((player) => player.participantId),
+    approvedIds: live
+      .filter((player) => participant(room, player.participantId).isBot)
+      .map((player) => player.participantId),
+  };
+  event(room, actorMemberId, 'RUNOUT_PROPOSED', '下注结束，等待荷官确认跑马次数', {}, now);
+  return finish(room, now);
 }
 
 export function advanceOnlineStreet(
@@ -1686,6 +1814,7 @@ export function showOnlineCards(
   holeCards: string[],
   now = Date.now(),
 ) {
+  assertRoomOpen(source);
   const room = copy(source);
   const actor = member(room, userId);
   invalid(isOnline(room), '电子筹码模式无需秀牌');
@@ -1732,13 +1861,19 @@ export function projectRoom(room: RoomState, userId: string, holeCards: string[]
   const { undo: _undo, ledger: _ledger, ...publicRoom } = copy(room);
   if (isOnline(room) && publicRoom.hand) {
     const board = publicRoom.hand.communityCards ?? [];
+    const boards = publicRoom.hand.communityBoards?.length
+      ? publicRoom.hand.communityBoards
+      : [board];
     publicRoom.hand.revealedCards = (publicRoom.hand.revealedCards ?? []).map((shown) => {
       const cards = [shown.cards[0] ?? null, shown.cards[1] ?? null];
       return {
         participantId: shown.participantId,
         cards,
         ...(cards.every((card) => card !== null)
-          ? { label: madeHandLabel(cards as string[], board) }
+          ? {
+              label: madeHandLabel(cards as string[], board),
+              labels: boards.map((visibleBoard) => madeHandLabel(cards as string[], visibleBoard)),
+            }
           : {}),
       };
     });
@@ -1771,7 +1906,13 @@ export function projectRoom(room: RoomState, userId: string, holeCards: string[]
             holeCards: [...holeCards],
             communityCards: [...(room.hand?.communityCards ?? [])],
             ...(holeCards.length === 2
-              ? { handLabel: madeHandLabel(holeCards, room.hand?.communityCards ?? []) }
+              ? {
+                  handLabel: madeHandLabel(holeCards, room.hand?.communityCards ?? []),
+                  handLabels: (room.hand?.communityBoards?.length
+                    ? room.hand.communityBoards
+                    : [room.hand?.communityCards ?? []]
+                  ).map((board) => madeHandLabel(holeCards, board)),
+                }
               : {}),
           },
         }

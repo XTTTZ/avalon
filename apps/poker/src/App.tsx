@@ -34,9 +34,12 @@ import {
   type SettlementChoice,
 } from '../shared/types';
 import { usePoker } from './api/client';
+import { RunoutPanel } from './RunoutPanel';
 import {
   CollectingChips,
   CommunityCardMotion,
+  ListWinningChips,
+  WinningChips,
   useTableAnimations,
   type TableAnimations,
 } from './tableAnimations';
@@ -130,6 +133,27 @@ const suitInfo: Record<string, { symbol: string; name: string }> = {
   c: { symbol: '♣', name: '梅花' },
 };
 
+function SuitMark({ suit }: { suit: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="currentColor">
+      {suit === 'h' ? (
+        <path d="M12 22C9 19 1 13 1 7a6 6 0 0 1 11-3A6 6 0 0 1 23 7c0 6-8 12-11 15Z" />
+      ) : suit === 'd' ? (
+        <path d="m12 1 10 11-10 11L2 12Z" />
+      ) : suit === 's' ? (
+        <path d="M12 1C9 5 1 10 1 15c0 6 8 7 10 2-1 3-2 5-4 6h10c-2-1-3-3-4-6 2 5 10 4 10-2 0-5-8-10-11-14Z" />
+      ) : (
+        <>
+          <circle cx="12" cy="6" r="5" />
+          <circle cx="6" cy="14" r="5.5" />
+          <circle cx="18" cy="14" r="5.5" />
+          <path d="M10 14h4c-1 4 0 7 3 9H7c3-2 4-5 3-9Z" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 function PlayingCard({
   code,
   compact = false,
@@ -155,14 +179,28 @@ function PlayingCard({
       aria-label={`${suit?.name ?? ''}${rank}`}
     >
       <b>{rank}</b>
-      <i>{suit?.symbol}</i>
+      <i>
+        <SuitMark suit={code[1]} />
+      </i>
     </span>
   );
 }
 
-function CommunityCards({ room, animation }: { room: RoomView; animation?: TableAnimations }) {
+function CommunityCards({
+  room,
+  animation,
+  boardIndex = 0,
+}: {
+  room: RoomView;
+  animation?: TableAnimations;
+  boardIndex?: number;
+}) {
   if ((room.config.mode ?? 'chips') !== 'online' || !room.hand) return null;
-  const cards = room.online?.communityCards ?? room.hand.communityCards ?? [];
+  const cards =
+    room.hand.communityBoards?.[boardIndex] ??
+    room.online?.communityCards ??
+    room.hand.communityCards ??
+    [];
   return (
     <div className="community-cards" aria-label="公共牌">
       {Array.from({ length: 5 }, (_, index) => (
@@ -411,8 +449,11 @@ function publicCards(room: RoomView, id: string) {
   return room.hand?.revealedCards?.find((item) => item.participantId === id);
 }
 
-function playerHandLabel(room: RoomView, id: string) {
-  return room.me.participantId === id ? room.online?.handLabel : publicCards(room, id)?.label;
+function playerHandLabel(room: RoomView, id: string, boardIndex = 0) {
+  const shown = publicCards(room, id);
+  return room.me.participantId === id
+    ? (room.online?.handLabels?.[boardIndex] ?? room.online?.handLabel)
+    : (shown?.labels?.[boardIndex] ?? shown?.label);
 }
 
 function playerResult(room: RoomView, id: string) {
@@ -425,17 +466,19 @@ function PlayerCard({
   room,
   player,
   onSelect,
+  boardIndex,
 }: {
   room: RoomView;
   player: Participant;
   onSelect: () => void;
+  boardIndex: number;
 }) {
   const state = room.hand?.players.find((item) => item.participantId === player.id);
   const acting = room.hand?.actorId === player.id;
   const self = room.me.participantId === player.id;
   const result = playerResult(room, player.id);
   const winner = Boolean(result && result.payout > 0);
-  const label = playerHandLabel(room, player.id);
+  const label = playerHandLabel(room, player.id, boardIndex);
   const status = state?.folded ? 'FOLD' : state?.allIn ? 'ALL-IN' : !player.active ? '暂停' : '';
   return (
     <button
@@ -499,6 +542,9 @@ function HoleCardFaces({
   const shown = publicCards(room, player.id)?.cards ?? [];
   const cards = self ? (room.online?.holeCards ?? []) : shown;
   const canShow = self && room.hand?.phase === 'SETTLED' && cards.length === 2;
+  const folded = Boolean(
+    room.hand?.players.find((item) => item.participantId === player.id)?.folded,
+  );
   return (
     <>
       {[0, 1].map((index) => {
@@ -509,7 +555,7 @@ function HoleCardFaces({
           <button
             key={index}
             type="button"
-            className={`show-card-button ${shown[index] ? 'public' : 'showable'}`}
+            className={`show-card-button ${shown[index] ? 'public' : 'showable'} ${folded && shown[index] ? 'folded-reveal' : ''}`}
             disabled={busy || Boolean(shown[index])}
             aria-label={
               shown[index] ? `第 ${index + 1} 张底牌已公开` : `秀出第 ${index + 1} 张底牌`
@@ -522,7 +568,10 @@ function HoleCardFaces({
             {face}
           </button>
         ) : (
-          <span className="hole-card-face" key={index}>
+          <span
+            className={`hole-card-face ${folded && shown[index] ? 'folded-reveal' : ''}`}
+            key={index}
+          >
             {face}
           </span>
         );
@@ -937,10 +986,12 @@ function OnlineHoleCards({
   room,
   busy,
   command,
+  boardIndex,
 }: {
   room: RoomView;
   busy: boolean;
   command: ReturnType<typeof usePoker>['command'];
+  boardIndex: number;
 }) {
   if ((room.config.mode ?? 'chips') !== 'online' || !room.hand) return null;
   if (room.hand.phase === 'VOIDED') return null;
@@ -954,7 +1005,7 @@ function OnlineHoleCards({
         <small>
           {room.hand.phase === 'SETTLED' ? (shown === 2 ? '已秀两张' : '点底牌秀出') : '你的手牌'}
         </small>
-        <b>{room.online?.handLabel}</b>
+        <b>{playerHandLabel(room, player.id, boardIndex)}</b>
       </span>
       <div>
         <HoleCardFaces room={room} player={player} busy={busy} command={command} compact={false} />
@@ -967,10 +1018,14 @@ function PotSummary({
   room,
   onShowPots,
   animation,
+  boardIndex = 0,
+  onBoardChange,
 }: {
   room: RoomView;
   onShowPots?: () => void;
   animation?: TableAnimations;
+  boardIndex?: number;
+  onBoardChange?: (index: number) => void;
 }) {
   const hand = room.hand;
   const hasSidePots = (hand?.pots.length ?? 0) > 1;
@@ -1003,7 +1058,21 @@ function PotSummary({
           <strong>{amount(total)}</strong>
         </div>
       )}
-      <CommunityCards room={room} animation={animation} />
+      {(hand?.communityBoards?.length ?? 0) > 1 && (
+        <div className="board-tabs" aria-label="选择发牌轮次">
+          {hand!.communityBoards!.map((_, index) => (
+            <button
+              key={index}
+              aria-pressed={boardIndex === index}
+              className={boardIndex === index ? 'active' : ''}
+              onClick={() => onBoardChange?.(index)}
+            >
+              第 {index + 1} 次
+            </button>
+          ))}
+        </div>
+      )}
+      <CommunityCards room={room} animation={animation} boardIndex={boardIndex} />
       {hand && (
         <>
           <div className="center-meta">
@@ -1021,9 +1090,11 @@ function PotSummary({
               <span>
                 {hand.phase === 'SETTLED'
                   ? '已结算'
-                  : (room.config.mode ?? 'chips') === 'online'
-                    ? '系统处理中'
-                    : '等待荷官'}
+                  : hand.phase === 'RUNOUT_DECISION'
+                    ? '协商发牌'
+                    : (room.config.mode ?? 'chips') === 'online'
+                      ? '系统处理中'
+                      : '等待荷官'}
               </span>
             )}
           </div>
@@ -1137,6 +1208,12 @@ function TableView({
   command: ReturnType<typeof usePoker>['command'];
 }) {
   const animation = useTableAnimations(room);
+  const [selectedBoard, setSelectedBoard] = useState(0);
+  useEffect(() => setSelectedBoard(0), [room.hand?.id]);
+  const boardIndex = Math.min(
+    selectedBoard,
+    Math.max(0, (room.hand?.communityBoards?.length ?? 1) - 1),
+  );
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [showPots, setShowPots] = useState(false);
   const tableRef = useRef<HTMLElement>(null);
@@ -1222,7 +1299,13 @@ function TableView({
         >
           <div className="table-felt">
             <div className="table-center">
-              <PotSummary room={room} animation={animation} onShowPots={() => setShowPots(true)} />
+              <PotSummary
+                room={room}
+                animation={animation}
+                boardIndex={boardIndex}
+                onBoardChange={setSelectedBoard}
+                onShowPots={() => setShowPots(true)}
+              />
             </div>
           </div>
           {arranged.map((player, index) => {
@@ -1273,6 +1356,7 @@ function TableView({
                 <PlayerCard
                   room={room}
                   player={player}
+                  boardIndex={boardIndex}
                   onSelect={() => setSelectedPlayerId(player.id)}
                 />
                 <SeatCards room={room} player={player} busy={busy} command={command} />
@@ -1282,6 +1366,11 @@ function TableView({
                   .map((bet) => (
                     <CollectingChips key={bet.key} bet={bet} />
                   ))}
+                {animation.payouts
+                  .filter((payout) => payout.participantId === player.id)
+                  .map((payout) => (
+                    <WinningChips key={payout.key} payout={payout} />
+                  ))}
               </div>
             );
           })}
@@ -1289,7 +1378,12 @@ function TableView({
       ) : (
         <section className="player-list-view" aria-label="玩家列表牌桌">
           <div className="list-pot-card">
-            <PotSummary room={room} animation={animation} />
+            <PotSummary
+              room={room}
+              animation={animation}
+              boardIndex={boardIndex}
+              onBoardChange={setSelectedBoard}
+            />
           </div>
           <div className="list-players">
             {seated.map((player) => (
@@ -1300,10 +1394,15 @@ function TableView({
                   animation={animation}
                   onSelect={() => setSelectedPlayerId(player.id)}
                 />
+                {animation.payouts
+                  .filter((payout) => payout.participantId === player.id)
+                  .map((payout) => (
+                    <ListWinningChips key={payout.key} payout={payout} />
+                  ))}
                 {player.id !== room.me.participantId &&
                   publicCards(room, player.id)?.cards.some(Boolean) && (
                     <div className="list-public-cards">
-                      <small>{playerHandLabel(room, player.id)}</small>
+                      <small>{playerHandLabel(room, player.id, boardIndex)}</small>
                       <HoleCardFaces room={room} player={player} busy={busy} command={command} />
                     </div>
                   )}
@@ -1356,7 +1455,7 @@ function TableView({
         />
       )}
       {(layout === 'list' || !selfSeated) && (
-        <OnlineHoleCards room={room} busy={busy} command={command} />
+        <OnlineHoleCards room={room} busy={busy} command={command} boardIndex={boardIndex} />
       )}
       {layout === 'table' &&
         selfSeated &&
@@ -1377,7 +1476,7 @@ function TableView({
             <div className="departed-reveal" key={player.id}>
               <span>
                 <b>{player.name}</b>
-                <small>{playerHandLabel(room, player.id)}</small>
+                <small>{playerHandLabel(room, player.id, boardIndex)}</small>
               </span>
               <HoleCardFaces room={room} player={player} busy={busy} command={command} />
             </div>
@@ -1386,9 +1485,12 @@ function TableView({
       )}
       {!online && <DealerPrompt room={room} busy={busy} command={command} />}
       {!online && <Showdown room={room} busy={busy} command={command} />}
+      {online && <RunoutPanel room={room} busy={busy} command={command} />}
       {betweenHands && <CashGameControls room={room} busy={busy} command={command} />}
       {betweenHands && <StartPanel room={room} busy={busy} command={command} />}
-      {hand && !betweenHands && <ActionBar room={room} busy={busy} command={command} />}
+      {hand && !betweenHands && hand.phase !== 'RUNOUT_DECISION' && (
+        <ActionBar room={room} busy={busy} command={command} />
+      )}
     </>
   );
 }
@@ -2003,6 +2105,20 @@ function ManageView({
           >
             确认转移房主
           </button>
+          <div className="danger-zone">
+            <button
+              className="danger wide"
+              disabled={busy}
+              onClick={() => {
+                if (
+                  window.confirm('确认解散房间？所有人将退出；未结束的本手会作废，下注筹码退回。')
+                )
+                  void command({ type: 'dissolve-room' });
+              }}
+            >
+              解散房间
+            </button>
+          </div>
         </section>
       )}
       {room.me.isDealer && (

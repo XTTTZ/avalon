@@ -9,6 +9,7 @@ import {
 import {
   advanceOnlineStreet,
   applyCommand,
+  beginOnlineRunouts,
   createRoom,
   joinRoom,
   projectRoom,
@@ -19,11 +20,12 @@ import {
 } from '../domain/engine.js';
 import {
   compareScores,
-  completeBoard,
+  completeBoards,
   createOnlineDeal,
   dealBoardStreet,
   evaluateHoldem,
   madeHandLabel,
+  maximumRunouts,
   type OnlineHandSecrets,
 } from '../domain/cards.js';
 import {
@@ -74,7 +76,13 @@ function actorMemberId(record: RoomRecord, userId: string) {
 }
 
 function advanceOnlineGame(record: RoomRecord, userId: string, now: number) {
-  if (record.state.config.mode !== 'online' || !record.state.hand || record.state.paused) return;
+  if (
+    record.state.config.mode !== 'online' ||
+    !record.state.hand ||
+    record.state.paused ||
+    record.state.dissolvedAt !== undefined
+  )
+    return;
   const actorId = actorMemberId(record, userId);
   let guard = 0;
   while (record.state.hand && guard < 3) {
@@ -91,44 +99,69 @@ function advanceOnlineGame(record: RoomRecord, userId: string, now: number) {
         );
         return !item.allIn && (player?.stack ?? 0) > 0;
       }).length;
-      const dealt =
-        ableToBet > 1
-          ? dealBoardStreet(secrets.deck, hand.street)
-          : completeBoard(secrets.deck, hand.street);
-      const communityCards = [...(hand.communityCards ?? []), ...dealt];
-      record.state = advanceOnlineStreet(record.state, actorId, communityCards, now);
+      const board = hand.communityCards ?? [];
+      if (ableToBet <= 1 && live.length > 1 && board.length < 5) {
+        const hasHuman = live.some(
+          (player) =>
+            !record.state.participants.find(
+              (participant) => participant.id === player.participantId,
+            )?.isBot,
+        );
+        if (!hand.runout && hasHuman) {
+          record.state = beginOnlineRunouts(
+            record.state,
+            actorId,
+            maximumRunouts(secrets.deck, hand.street),
+            now,
+          );
+          break;
+        }
+        const boards = completeBoards(
+          secrets.deck,
+          hand.street,
+          board,
+          hand.runout?.proposedRuns ?? 1,
+        );
+        record.state = advanceOnlineStreet(record.state, actorId, boards[0], now);
+        record.state.hand!.communityBoards = boards;
+      } else {
+        const communityCards = [...board, ...dealBoardStreet(secrets.deck, hand.street)];
+        record.state = advanceOnlineStreet(record.state, actorId, communityCards, now);
+      }
       continue;
     }
     if (hand.phase === 'SHOWDOWN') {
       const live = hand.players.filter((item) => !item.folded);
       const board = hand.communityCards ?? [];
-      if (live.length > 1 && board.length !== 5)
+      const boards = hand.communityBoards?.length ? hand.communityBoards : [board];
+      if (live.length > 1 && boards.some((visibleBoard) => visibleBoard.length !== 5))
         throw new PokerError('INTERNAL', '线上牌局公共牌不完整');
-      const evaluated = new Map<string, { score: number[]; label: string; cards: string[] }>();
-      if (live.length > 1) {
+      const evaluatedBoards = boards.map((visibleBoard) => {
+        const evaluated = new Map<string, number[]>();
+        if (live.length <= 1) return evaluated;
         for (const player of live) {
           const cards = secrets.holeCards[player.participantId];
           if (!cards || cards.length !== 2) throw new PokerError('INTERNAL', '线上牌局底牌缺失');
-          const result = evaluateHoldem([...cards, ...board]);
-          evaluated.set(player.participantId, { ...result, cards: [...cards] });
+          evaluated.set(player.participantId, evaluateHoldem([...cards, ...visibleBoard]).score);
         }
-      }
+        return evaluated;
+      });
       const choices = hand.pots.map((pot) => {
         if (live.length === 1)
           return { potId: pot.id, runs: [{ winnerIds: [live[0].participantId] }] };
-        const contenders = pot.eligibleIds.map((id) => ({ id, result: evaluated.get(id)! }));
-        let best = contenders[0].result.score;
-        for (const contender of contenders.slice(1))
-          if (compareScores(contender.result.score, best) > 0) best = contender.result.score;
         return {
           potId: pot.id,
-          runs: [
-            {
+          runs: evaluatedBoards.map((evaluated) => {
+            const contenders = pot.eligibleIds.map((id) => ({ id, score: evaluated.get(id)! }));
+            let best = contenders[0].score;
+            for (const contender of contenders.slice(1))
+              if (compareScores(contender.score, best) > 0) best = contender.score;
+            return {
               winnerIds: contenders
-                .filter((contender) => compareScores(contender.result.score, best) === 0)
+                .filter((contender) => compareScores(contender.score, best) === 0)
                 .map((contender) => contender.id),
-            },
-          ],
+            };
+          }),
         };
       });
       const shownBots = hand.players
@@ -146,6 +179,7 @@ function advanceOnlineGame(record: RoomRecord, userId: string, now: number) {
             label: madeHandLabel(cards, board),
           };
         });
+      hand.communityBoards = boards;
       record.state = settleOnlineHand(record.state, actorId, choices, shownBots, now);
       break;
     }
@@ -249,6 +283,7 @@ function progressBot(record: RoomRecord, now: number) {
 
 function active(record: RoomRecord | null, now: number) {
   if (!record) throw new PokerError('NOT_FOUND', '房间不存在');
+  if (record.state.dissolvedAt !== undefined) throw new PokerError('ROOM_CLOSED', '房主已解散房间');
   if (record.state.expiresAt <= now) throw new PokerError('NOT_FOUND', '房间已过期');
   return record;
 }
@@ -339,6 +374,16 @@ function validateCommand(value: unknown): asserts value is PokerCommand {
       )
         throw new PokerError('INVALID', '请选择要秀出的手牌');
       break;
+    case 'propose-runouts':
+      validateEntityId(command.handId, '牌局');
+      if (!Number.isInteger(command.runs) || Number(command.runs) < 1 || Number(command.runs) > 5)
+        throw new PokerError('INVALID', '跑马次数无效');
+      break;
+    case 'agree-runouts':
+    case 'reject-runouts':
+    case 'finish-runouts':
+      validateEntityId(command.handId, '牌局');
+      break;
     case 'settle':
     case 'save-settlement':
       validateSettlement(command.pots);
@@ -413,6 +458,7 @@ function validateCommand(value: unknown): asserts value is PokerCommand {
     case 'undo':
     case 'pause':
     case 'resume':
+    case 'dissolve-room':
       break;
     default:
       throw new PokerError('INVALID', '未知操作');
@@ -582,6 +628,17 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
         throw new PokerError('CONFLICT', '牌局已更新，请同步后重试');
       const command = input.command as PokerCommand;
       applyRecordedCommand(record, claims.userId, command, now);
+      if (command.type === 'dissolve-room') {
+        for (const member of record.state.members.filter(
+          (member) => !member.isBot && !member.removedAt,
+        )) {
+          const user = await transaction.get<UserRecord>('users', member.userId);
+          if (user?.lastRoom === record.state.code) {
+            user.lastRoom = null;
+            await transaction.set('users', user.userId, user, user.expiresAt);
+          }
+        }
+      }
       record.receipts.push({ id: input.requestId, userId: claims.userId, digest: hash });
       record.receipts = record.receipts.slice(-512);
       await saveRoom(transaction, record);

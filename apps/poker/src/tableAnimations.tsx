@@ -5,6 +5,8 @@ import './tableAnimations.css';
 const COLLECTION_MS = 450;
 const DEAL_MS = 300;
 const DEAL_STAGGER_MS = 100;
+const PAYOUT_MS = 700;
+const PAYOUT_STAGGER_MS = 150;
 
 export interface CollectingBet {
   participantId: string;
@@ -12,9 +14,17 @@ export interface CollectingBet {
   key: string;
 }
 
+export interface WinningPayout {
+  participantId: string;
+  amount: number;
+  key: string;
+  delayMs: number;
+}
+
 export interface TableAnimations {
   collecting: CollectingBet[];
-  /** Keep the old seat order while chips from players who just busted are moving. */
+  payouts: WinningPayout[];
+  /** Keep the old seat order until both collecting and winner payouts finish. */
   retainedParticipants: RoomView['participants'];
   /** Non-betting phases retain streetCommitted on the server; hide their static chips. */
   hideBets: boolean;
@@ -40,6 +50,7 @@ interface Snapshot {
 
 const emptyState = (): AnimationState => ({
   collecting: [],
+  payouts: [],
   retainedParticipants: [],
   dealDelayMs: 0,
 });
@@ -50,12 +61,17 @@ const isBoundary = (event: RoomView['events'][number]) =>
   event.type === 'HAND_SETTLED';
 
 function snapshot(room: RoomView): Snapshot {
+  const hand = room.hand as
+    (NonNullable<RoomView['hand']> & { communityBoards?: string[][] }) | null;
   return {
     roomId: room.id,
     handId: room.hand?.id ?? null,
     street: room.hand?.street ?? null,
     phase: room.hand?.phase ?? null,
-    board: [...(room.online?.communityCards ?? room.hand?.communityCards ?? [])],
+    // Deal indices refer to the first board even when the hand has several runouts.
+    board: [
+      ...(hand?.communityBoards?.[0] ?? room.online?.communityCards ?? hand?.communityCards ?? []),
+    ],
     bets: new Map(
       room.hand?.players.map((player) => [player.participantId, player.streetCommitted]) ?? [],
     ),
@@ -77,13 +93,16 @@ export function useTableAnimations(room: RoomView): TableAnimations {
   const previous = useRef<Snapshot | null>(null);
   const collectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const dealTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const payoutTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const collectionEndsAt = useRef(0);
+  const dealEndsAt = useRef(0);
   const [state, setState] = useState<AnimationState>(emptyState);
 
   useEffect(
     () => () => {
       clearTimeout(collectionTimer.current);
       clearTimeout(dealTimer.current);
+      payoutTimers.current.forEach(clearTimeout);
     },
     [],
   );
@@ -95,7 +114,10 @@ export function useTableAnimations(room: RoomView): TableAnimations {
     const reset = () => {
       clearTimeout(collectionTimer.current);
       clearTimeout(dealTimer.current);
+      payoutTimers.current.forEach(clearTimeout);
+      payoutTimers.current = [];
       collectionEndsAt.current = 0;
+      dealEndsAt.current = 0;
       setState(emptyState());
     };
 
@@ -158,7 +180,11 @@ export function useTableAnimations(room: RoomView): TableAnimations {
         }));
         collectionTimer.current = setTimeout(() => {
           collectionEndsAt.current = 0;
-          setState((current) => ({ ...current, collecting: [], retainedParticipants: [] }));
+          setState((current) => ({
+            ...current,
+            collecting: [],
+            retainedParticipants: current.payouts.length > 0 ? current.retainedParticipants : [],
+          }));
         }, COLLECTION_MS);
       }
     }
@@ -168,6 +194,9 @@ export function useTableAnimations(room: RoomView): TableAnimations {
       const dealFrom = before.board.length;
       const dealDelayMs = Math.max(0, collectionEndsAt.current - Date.now());
       const dealKey = `${after.handId}-${liveEvents.filter(isBoundary).at(-1)!.id}`;
+      const totalDealMs =
+        dealDelayMs + (after.board.length - dealFrom - 1) * DEAL_STAGGER_MS + DEAL_MS;
+      dealEndsAt.current = Date.now() + totalDealMs;
       setState((current) => ({
         ...current,
         dealFrom,
@@ -175,18 +204,59 @@ export function useTableAnimations(room: RoomView): TableAnimations {
         dealKey,
         dealDelayMs,
       }));
-      dealTimer.current = setTimeout(
-        () => {
-          setState((current) => ({
-            ...current,
-            dealFrom: undefined,
-            dealTo: undefined,
-            dealKey: undefined,
-            dealDelayMs: 0,
-          }));
-        },
-        dealDelayMs + (after.board.length - dealFrom - 1) * DEAL_STAGGER_MS + DEAL_MS,
+      dealTimer.current = setTimeout(() => {
+        dealEndsAt.current = 0;
+        setState((current) => ({
+          ...current,
+          dealFrom: undefined,
+          dealTo: undefined,
+          dealKey: undefined,
+          dealDelayMs: 0,
+        }));
+      }, totalDealMs);
+    }
+
+    const settled = liveEvents.find((event) => event.type === 'HAND_SETTLED');
+    if (settled && after.phase === 'SETTLED') {
+      const payoutDelayMs = Math.max(
+        0,
+        collectionEndsAt.current - Date.now(),
+        dealEndsAt.current - Date.now(),
       );
+      const payouts = (room.hand?.results ?? [])
+        .filter((result) => result.payout > 0)
+        .map((result, index) => ({
+          participantId: result.participantId,
+          amount: result.payout,
+          key: `${after.handId}-${settled.id}-${result.participantId}`,
+          delayMs: payoutDelayMs + index * PAYOUT_STAGGER_MS,
+        }));
+      if (payouts.length > 0) {
+        payoutTimers.current.forEach(clearTimeout);
+        setState((current) => ({
+          ...current,
+          payouts,
+          retainedParticipants:
+            current.retainedParticipants.length > 0
+              ? current.retainedParticipants
+              : before.participants,
+        }));
+        payoutTimers.current = payouts.map((payout) =>
+          setTimeout(() => {
+            setState((current) => {
+              const remainingPayouts = current.payouts.filter((item) => item.key !== payout.key);
+              return {
+                ...current,
+                payouts: remainingPayouts,
+                retainedParticipants:
+                  remainingPayouts.length > 0 || current.collecting.length > 0
+                    ? current.retainedParticipants
+                    : [],
+              };
+            });
+          }, payout.delayMs + PAYOUT_MS),
+        );
+      }
     }
   }, [room]);
 
@@ -199,6 +269,48 @@ export function CollectingChips({ bet }: { bet: CollectingBet }) {
     <div className="seat-bet table-collecting-chip" aria-hidden="true">
       <strong>{String(bet.amount)}</strong>
     </div>
+  );
+}
+
+/** Render inside the recipient's .seat-node, alongside CollectingChips. */
+export function WinningChips({ payout }: { payout: WinningPayout }) {
+  return (
+    <div
+      className="table-winning-chips"
+      style={{ animationDelay: `${payout.delayMs}ms` }}
+      aria-hidden="true"
+    >
+      <strong>+{String(payout.amount)}</strong>
+    </div>
+  );
+}
+
+/** Render inside a positioned .list-player-item wrapper around the player row. */
+export function ListWinningChips({ payout }: { payout: WinningPayout }) {
+  const target = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const element = target.current;
+    const pot = element?.closest('.player-list-view')?.querySelector('.list-pot-card');
+    if (!element || !pot) return;
+    // The outer span stays still; measuring the animated inner badge would make
+    // a repeated layout effect use the pot position instead of the row position.
+    const targetRect = element.getBoundingClientRect();
+    const potRect = pot.getBoundingClientRect();
+    element.style.setProperty(
+      '--payout-from-x',
+      `${potRect.left + potRect.width / 2 - targetRect.left - targetRect.width / 2}px`,
+    );
+    element.style.setProperty(
+      '--payout-from-y',
+      `${potRect.top + potRect.height / 2 - targetRect.top - targetRect.height / 2}px`,
+    );
+  }, [payout.key]);
+  return (
+    <span className="list-winning-chips" ref={target} aria-hidden="true">
+      <span className="list-winning-chip-motion" style={{ animationDelay: `${payout.delayMs}ms` }}>
+        <strong>+{String(payout.amount)}</strong>
+      </span>
+    </span>
   );
 }
 

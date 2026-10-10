@@ -2,7 +2,12 @@ export type Variant = 'standard' | 'short-deck';
 export type GameMode = 'chips' | 'online';
 export type Street = 'PREFLOP' | 'FLOP' | 'TURN' | 'RIVER' | 'SHOWDOWN';
 export type HandPhase =
-  'BETTING' | 'AWAITING_STREET_CONFIRMATION' | 'SHOWDOWN' | 'SETTLED' | 'VOIDED';
+  | 'BETTING'
+  | 'AWAITING_STREET_CONFIRMATION'
+  | 'RUNOUT_DECISION'
+  | 'SHOWDOWN'
+  | 'SETTLED'
+  | 'VOIDED';
 export type PlayerAction = 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'all-in';
 
 export interface BlindLevel {
@@ -86,6 +91,7 @@ export interface RevealedHand {
   participantId: string;
   cards: (string | null)[];
   label?: string;
+  labels?: string[];
 }
 
 export interface HandResult {
@@ -114,6 +120,13 @@ export interface HandState {
   uncalled: { participantId: string; amount: number } | null;
   settlementDraft: SettlementChoice[];
   communityCards?: string[];
+  communityBoards?: string[][];
+  runout?: {
+    maxRuns: number;
+    proposedRuns: number;
+    approvedIds: string[];
+    eligibleIds: string[];
+  };
   showdownHands?: ShowdownHand[];
   revealedCards?: RevealedHand[];
   results?: HandResult[];
@@ -124,6 +137,7 @@ export interface HandState {
 
 export type EventType =
   | 'ROOM_CREATED'
+  | 'ROOM_DISSOLVED'
   | 'MEMBER_JOINED'
   | 'MEMBER_REMOVED'
   | 'OWNER_CHANGED'
@@ -139,6 +153,10 @@ export type EventType =
   | 'UNCALLED_RETURNED'
   | 'STREET_READY'
   | 'STREET_CONFIRMED'
+  | 'RUNOUT_PROPOSED'
+  | 'RUNOUT_AGREED'
+  | 'RUNOUT_REJECTED'
+  | 'RUNOUT_CONFIRMED'
   | 'HAND_SETTLED'
   | 'CARDS_SHOWN'
   | 'HAND_VOIDED'
@@ -196,6 +214,7 @@ export interface RoomState {
   updatedAt: number;
   lastActiveAt?: number;
   expiresAt: number;
+  dissolvedAt?: number;
   ownerMemberId: string;
   dealerMemberId: string | null;
   paused: boolean;
@@ -238,6 +257,7 @@ export interface RoomView extends Omit<RoomState, 'undo' | 'ledger' | 'members'>
     holeCards: string[];
     communityCards: string[];
     handLabel?: string;
+    handLabels?: string[];
   };
 }
 
@@ -245,6 +265,11 @@ export type PokerCommand =
   | { type: 'start-hand'; buttonId?: string }
   | { type: 'act'; action: PlayerAction; to?: number }
   | { type: 'show-cards'; handId: string; cardIndexes: number[] }
+  | { type: 'propose-runouts'; handId: string; runs: number }
+  | { type: 'agree-runouts'; handId: string }
+  | { type: 'reject-runouts'; handId: string }
+  | { type: 'finish-runouts'; handId: string }
+  | { type: 'dissolve-room' }
   | { type: 'confirm-street' }
   | { type: 'settle'; pots: SettlementChoice[] }
   | { type: 'save-settlement'; pots: SettlementChoice[] }
@@ -285,7 +310,14 @@ export type ApiRequest =
     };
 
 export type ApiErrorCode =
-  'INVALID' | 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_FOUND' | 'CONFLICT' | 'RATE_LIMIT' | 'INTERNAL';
+  | 'INVALID'
+  | 'UNAUTHORIZED'
+  | 'FORBIDDEN'
+  | 'NOT_FOUND'
+  | 'ROOM_CLOSED'
+  | 'CONFLICT'
+  | 'RATE_LIMIT'
+  | 'INTERNAL';
 
 export class PokerError extends Error {
   constructor(

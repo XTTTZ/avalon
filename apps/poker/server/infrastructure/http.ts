@@ -23,6 +23,7 @@ const statuses = {
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
+  ROOM_CLOSED: 410,
   RATE_LIMIT: 429,
   INTERNAL: 500,
 } as const;

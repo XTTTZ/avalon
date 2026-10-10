@@ -70,3 +70,15 @@
 .playing-card.suit-c {
   color: #167340;
 }
+
+/* Full-size vector suits use their whole corner, without font glyph whitespace. */
+.playing-card:not(.card-back):not(.placeholder) i {
+  width: var(--suit-size);
+  height: var(--suit-size);
+}
+
+.playing-card i svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

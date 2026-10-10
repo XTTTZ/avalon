@@ -86,15 +86,35 @@ export function usePoker() {
   const sessionRef = useRef(session);
   const roomRef = useRef(room);
   const lastHeartbeatRef = useRef(0);
+  const closedRoomIds = useRef(new Set<string>());
   sessionRef.current = session;
   roomRef.current = room;
 
-  const accept = useCallback((view: RoomView) => {
-    setRoom((current) => (!current || view.version >= current.version ? view : current));
-    write(KEY_ROOM, view.code);
+  const roomClosed = useCallback(() => {
+    if (roomRef.current) closedRoomIds.current.add(roomRef.current.id);
+    localStorage.removeItem(KEY_ROOM);
+    localStorage.removeItem(KEY_PENDING);
+    roomRef.current = null;
+    setRoom(null);
     setConnection('online');
-    setError(null);
+    setError('房主已解散房间');
   }, []);
+
+  const accept = useCallback(
+    (view: RoomView) => {
+      if (view.dissolvedAt) {
+        closedRoomIds.current.add(view.id);
+        roomClosed();
+        return;
+      }
+      if (closedRoomIds.current.has(view.id)) return;
+      setRoom((current) => (!current || view.version >= current.version ? view : current));
+      write(KEY_ROOM, view.code);
+      setConnection('online');
+      setError(null);
+    },
+    [roomClosed],
+  );
 
   const login = useCallback(async () => {
     setConnection('connecting');
@@ -147,6 +167,10 @@ export function usePoker() {
         if (!('unchanged' in result)) accept(result);
         else setConnection('online');
       } catch (syncError) {
+        if (syncError instanceof ClientError && syncError.code === 'ROOM_CLOSED') {
+          roomClosed();
+          return;
+        }
         if (syncError instanceof ClientError && syncError.code === 'NOT_FOUND') {
           localStorage.removeItem(KEY_ROOM);
           setRoom(null);
@@ -158,7 +182,7 @@ export function usePoker() {
         setConnection('offline');
       }
     },
-    [accept, login],
+    [accept, login, roomClosed],
   );
 
   useEffect(() => {
@@ -262,6 +286,10 @@ export function usePoker() {
         accept(view);
         return true;
       } catch (commandError) {
+        if (commandError instanceof ClientError && commandError.code === 'ROOM_CLOSED') {
+          roomClosed();
+          return false;
+        }
         if (commandError instanceof ClientError && commandError.code !== 'NETWORK')
           localStorage.removeItem(KEY_PENDING);
         setError(commandError instanceof Error ? commandError.message : '操作失败');
@@ -271,7 +299,7 @@ export function usePoker() {
         setBusy(false);
       }
     },
-    [accept, busy, sync],
+    [accept, busy, sync, roomClosed],
   );
 
   const retryPending = useCallback(async () => {
@@ -285,6 +313,10 @@ export function usePoker() {
       accept(view);
       return true;
     } catch (pendingError) {
+      if (pendingError instanceof ClientError && pendingError.code === 'ROOM_CLOSED') {
+        roomClosed();
+        return false;
+      }
       if (pendingError instanceof ClientError && pendingError.code !== 'NETWORK')
         localStorage.removeItem(KEY_PENDING);
       setError(pendingError instanceof Error ? pendingError.message : '确认操作失败');
@@ -292,7 +324,7 @@ export function usePoker() {
     } finally {
       setBusy(false);
     }
-  }, [accept]);
+  }, [accept, roomClosed]);
 
   const leaveLocal = useCallback(() => {
     localStorage.removeItem(KEY_ROOM);

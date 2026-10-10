@@ -47,6 +47,31 @@ export function completeBoard(deck: string[], street: HandState['street']) {
   return cards;
 }
 
+export function maximumRunouts(deck: string[], street: HandState['street']) {
+  const cardsPerRun = street === 'PREFLOP' ? 8 : street === 'FLOP' ? 4 : street === 'TURN' ? 2 : 0;
+  return cardsPerRun > 0 ? Math.min(5, Math.floor(deck.length / cardsPerRun)) : 1;
+}
+
+export function completeBoards(
+  deck: string[],
+  street: HandState['street'],
+  sharedBoard: string[],
+  runs: number,
+) {
+  const expectedCards =
+    street === 'PREFLOP' ? 0 : street === 'FLOP' ? 3 : street === 'TURN' ? 4 : 5;
+  if (
+    sharedBoard.length !== expectedCards ||
+    !Number.isInteger(runs) ||
+    runs < 1 ||
+    runs > maximumRunouts(deck, street)
+  )
+    throw new Error('Invalid runout count or board');
+  // All boards share cards that were already dealt. Every new card and burn consumes
+  // the same private deck so independent runouts never reuse an unseen card.
+  return Array.from({ length: runs }, () => [...sharedBoard, ...completeBoard(deck, street)]);
+}
+
 function fiveCardScore(cards: string[]): EvaluatedHand {
   const values = cards.map((card) => RANKS.indexOf(card[0]) + 2).sort((a, b) => b - a);
   const counts = new Map<number, number>();

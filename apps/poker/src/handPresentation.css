@@ -119,6 +119,109 @@
   opacity: 1;
 }
 
+.hole-card-face.folded-reveal,
+.show-card-button.folded-reveal {
+  opacity: 0.52;
+}
+
+.hole-card-bar .hole-card-face.folded-reveal,
+.hole-card-bar .show-card-button.folded-reveal,
+.seat-hole-cards.own .folded-reveal {
+  opacity: 0.7;
+}
+
+.amount-row {
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 32%);
+}
+
+.amount-row button {
+  width: 100%;
+}
+
+.board-tabs {
+  display: flex;
+  gap: 3px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.board-tabs button {
+  min-height: 24px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  color: #d5e9df;
+  background: #ffffff16;
+  font-size: 8px;
+}
+
+.board-tabs button.active {
+  color: #3c2c0d;
+  background: #f0d390;
+}
+
+.runout-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.runout-panel header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+}
+
+.runout-panel header small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.runout-options,
+.runout-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.runout-options button,
+.runout-actions button {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px;
+  font-size: 12px;
+}
+
+.runout-options button.selected,
+:root[data-theme='dark'] .runout-options button.selected {
+  color: #604414;
+  background: #f2d895;
+  border-color: #c79f49;
+  opacity: 1;
+}
+
+.runout-consents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.runout-consents span {
+  max-width: 100%;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--soft);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.runout-consents span.agreed {
+  color: var(--forest-2);
+  font-weight: 700;
+}
+
 .show-card-button:focus-visible {
   outline: 3px solid #e8b644;
   outline-offset: 2px;
@@ -134,6 +237,10 @@
 
 .list-player-item > .list-player-row {
   width: 100%;
+}
+
+.list-player-item {
+  position: relative;
 }
 
 .list-player-row.winner,
