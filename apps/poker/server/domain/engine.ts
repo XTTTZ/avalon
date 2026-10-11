@@ -1412,9 +1412,8 @@ export function applyCommand(
       invalid(betweenHands(room), '请在两手之间添加机器人');
       invalid(activeSeats(room).length < 10, '牌桌座位已满');
       invalid(room.members.filter((item) => !item.removedAt).length < 32, '房间人数已满');
-      const usedNames = new Set(
-        room.members.filter((item) => !item.removedAt).map((item) => nameKey(item.name)),
-      );
+      // Keep removed bot numbers reserved so their historical balances stay recognizable.
+      const usedNames = new Set(room.members.map((item) => nameKey(item.name)));
       let number = 1;
       while (usedNames.has(`机器人 ${number}`)) number += 1;
       const name = `机器人 ${number}`;

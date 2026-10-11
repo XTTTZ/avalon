@@ -121,8 +121,8 @@ export function RenameButton({
   const duplicate = room.members.some(
     (member) =>
       member.id !== room.me.memberId &&
-      member.name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase() ===
-        normalized.toLowerCase(),
+      member.name.normalize('NFKC').trim().replace(/\s+/g, ' ').toUpperCase().toLowerCase() ===
+        normalized.toUpperCase().toLowerCase(),
   );
   const valid = normalized.length > 0 && normalized.length <= 24 && !duplicate;
   return (
