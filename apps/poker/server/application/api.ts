@@ -58,7 +58,7 @@ interface RoomRecord {
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const code = () => String(Math.floor(1000 + Math.random() * 9000));
 
-function projectRecord(record: RoomRecord, userId: string) {
+function projectRecord(record: RoomRecord, userId: string, now = Date.now()) {
   const participantId = record.state.members.find(
     (item) => item.userId === userId && !item.removedAt,
   )?.participantId;
@@ -66,7 +66,7 @@ function projectRecord(record: RoomRecord, userId: string) {
     participantId && record.onlineHand?.handId === record.state.hand?.id
       ? (record.onlineHand?.holeCards[participantId] ?? [])
       : [];
-  return projectRoom(record.state, userId, holeCards);
+  return projectRoom(record.state, userId, holeCards, now);
 }
 
 function actorMemberId(record: RoomRecord, userId: string) {
@@ -164,23 +164,17 @@ function advanceOnlineGame(record: RoomRecord, userId: string, now: number) {
           }),
         };
       });
-      const shownBots = hand.players
-        .filter((player) =>
-          record.state.participants.some(
-            (participant) => participant.id === player.participantId && participant.isBot,
-          ),
-        )
-        .map((player) => {
-          const cards = secrets.holeCards[player.participantId];
-          if (!cards || cards.length !== 2) throw new PokerError('INTERNAL', '机器人底牌缺失');
-          return {
-            participantId: player.participantId,
-            cards: [...cards],
-            label: madeHandLabel(cards, board),
-          };
-        });
+      const privateHands = hand.players.map((player) => {
+        const cards = secrets.holeCards[player.participantId];
+        if (!cards || cards.length !== 2) throw new PokerError('INTERNAL', '线上牌局底牌缺失');
+        return {
+          participantId: player.participantId,
+          cards: [...cards],
+          label: madeHandLabel(cards, board),
+        };
+      });
       hand.communityBoards = boards;
-      record.state = settleOnlineHand(record.state, actorId, choices, shownBots, now);
+      record.state = settleOnlineHand(record.state, actorId, choices, privateHands, now);
       break;
     }
     break;
@@ -223,6 +217,7 @@ function applyRecordedCommand(
   const previousUndoId = record.state.undo.at(-1)?.eventId;
   const undoTarget = command.type === 'undo' ? previousUndoId : undefined;
   record.state = applyCommand(record.state, userId, command, now);
+  if (command.type === 'react' || command.type === 'rename-self') return;
   if (undoTarget && record.onlineUndo && undoTarget in record.onlineUndo) {
     record.onlineHand = record.onlineUndo[undoTarget]
       ? structuredClone(record.onlineUndo[undoTarget]!)
@@ -381,8 +376,23 @@ function validateCommand(value: unknown): asserts value is PokerCommand {
       break;
     case 'agree-runouts':
     case 'reject-runouts':
+      validateEntityId(command.handId, '牌局');
+      break;
     case 'finish-runouts':
       validateEntityId(command.handId, '牌局');
+      if (
+        command.runs !== undefined &&
+        (!Number.isInteger(command.runs) || Number(command.runs) < 1 || Number(command.runs) > 5)
+      )
+        throw new PokerError('INVALID', '跑马次数无效');
+      break;
+    case 'rename-self':
+      validateName(command.name);
+      break;
+    case 'react':
+      if (!['smile', 'laugh', 'wow', 'cry', 'egg', 'rose'].includes(String(command.kind)))
+        throw new PokerError('INVALID', '表情无效');
+      if (command.targetId !== undefined) validateEntityId(command.targetId, '玩家');
       break;
     case 'settle':
     case 'save-settlement':
@@ -488,7 +498,11 @@ function validateRequest(input: unknown): asserts input is ApiRequest {
   )
     throw new PokerError('INVALID', '版本无效');
   if (value.action === 'command') {
-    if (!Number.isSafeInteger(value.expectedVersion) || typeof value.phaseKey !== 'string')
+    if (
+      !Number.isSafeInteger(value.expectedVersion) ||
+      Number(value.expectedVersion) < 1 ||
+      typeof value.phaseKey !== 'string'
+    )
       throw new PokerError('INVALID', '牌局版本无效');
     validateCommand(value.command);
   }
@@ -543,7 +557,7 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
         if (replay) {
           if (replay.digest !== hash) throw new PokerError('CONFLICT', '请求编号已用于其他操作');
           const previous = active(await transaction.get<RoomRecord>('rooms', replay.code), now);
-          return projectRecord(previous, claims.userId);
+          return projectRecord(previous, claims.userId, now);
         }
         if (await transaction.get<RoomRecord>('rooms', roomCode)) return null;
         userRate(user, 'create', now);
@@ -553,7 +567,7 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
         user.lastRoom = roomCode;
         remember(user, { id: input.requestId, digest: hash, code: roomCode });
         await transaction.set('users', user.userId, user, user.expiresAt);
-        return projectRecord(record, claims.userId);
+        return projectRecord(record, claims.userId, now);
       });
       if (result) return result;
     }
@@ -567,7 +581,7 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
       if (replay) {
         if (replay.digest !== hash) throw new PokerError('CONFLICT', '请求编号已用于其他操作');
         const previous = active(await transaction.get<RoomRecord>('rooms', replay.code), now);
-        return projectRecord(previous, claims.userId);
+        return projectRecord(previous, claims.userId, now);
       }
       userRate(user, 'join', now);
       const record = active(await transaction.get<RoomRecord>('rooms', input.code), now);
@@ -576,18 +590,18 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
       user.lastRoom = input.code;
       remember(user, { id: input.requestId, digest: hash, code: input.code });
       await transaction.set('users', user.userId, user, user.expiresAt);
-      return projectRecord(record, claims.userId);
+      return projectRecord(record, claims.userId, now);
     });
   }
   if (input.action === 'get') {
     const record = active(await deps.store.get<RoomRecord>('rooms', input.code), now);
-    const view = projectRecord(record, claims.userId);
+    const view = projectRecord(record, claims.userId, now);
     if (botNeedsProgress(record, now)) {
       return deps.store.transaction(async (transaction) => {
         const latest = active(await transaction.get<RoomRecord>('rooms', input.code), now);
         actorMemberId(latest, claims.userId);
         if (progressBot(latest, now)) await saveRoom(transaction, latest);
-        const result = projectRecord(latest, claims.userId);
+        const result = projectRecord(latest, claims.userId, now);
         return input.version === result.version
           ? { unchanged: true, version: result.version }
           : result;
@@ -604,7 +618,7 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
       record.state = touchRoomActivity(record.state, claims.userId, now);
       progressBot(record, now);
       await saveRoom(transaction, record);
-      const view = projectRecord(record, claims.userId);
+      const view = projectRecord(record, claims.userId, now);
       if (input.version === view.version) return { unchanged: true, version: view.version };
       return view;
     });
@@ -618,13 +632,12 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
       );
       if (replay) {
         if (replay.digest !== hash) throw new PokerError('CONFLICT', '请求编号已用于其他操作');
-        return projectRecord(record, claims.userId);
+        return projectRecord(record, claims.userId, now);
       }
       roomRate(record, claims.userId, now);
-      if (
-        record.state.version !== input.expectedVersion ||
-        record.state.phaseKey !== input.phaseKey
-      )
+      // Every gameplay mutation rotates phaseKey. A matching key lets a wager survive
+      // newer emoji/name-only versions, while preserving the guard against a changed hand.
+      if (input.expectedVersion > record.state.version || record.state.phaseKey !== input.phaseKey)
         throw new PokerError('CONFLICT', '牌局已更新，请同步后重试');
       const command = input.command as PokerCommand;
       applyRecordedCommand(record, claims.userId, command, now);
@@ -642,7 +655,7 @@ export async function handleApi(input: unknown, token: string | undefined, deps:
       record.receipts.push({ id: input.requestId, userId: claims.userId, digest: hash });
       record.receipts = record.receipts.slice(-512);
       await saveRoom(transaction, record);
-      return projectRecord(record, claims.userId);
+      return projectRecord(record, claims.userId, now);
     });
   }
   throw new PokerError('INVALID', '未知操作');

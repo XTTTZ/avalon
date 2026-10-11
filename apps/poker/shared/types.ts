@@ -9,6 +9,15 @@ export type HandPhase =
   | 'SETTLED'
   | 'VOIDED';
 export type PlayerAction = 'fold' | 'check' | 'call' | 'bet' | 'raise' | 'all-in';
+export type ReactionKind = 'smile' | 'laugh' | 'wow' | 'cry' | 'egg' | 'rose';
+
+export interface RoomReaction {
+  id: string;
+  senderId: string;
+  targetId?: string;
+  kind: ReactionKind;
+  createdAt: number;
+}
 
 export interface BlindLevel {
   smallBlind: number;
@@ -32,6 +41,7 @@ export interface RoomMember {
   name: string;
   joinedAt: number;
   lastActiveAt?: number;
+  lastReactionAt?: number;
   participantId?: string;
   removedAt?: number;
   isBot?: boolean;
@@ -140,6 +150,7 @@ export type EventType =
   | 'ROOM_DISSOLVED'
   | 'MEMBER_JOINED'
   | 'MEMBER_REMOVED'
+  | 'MEMBER_RENAMED'
   | 'OWNER_CHANGED'
   | 'SEATS_CHANGED'
   | 'DEALER_CHANGED'
@@ -229,6 +240,7 @@ export interface RoomState {
   events: PokerEvent[];
   ledger: LedgerEntry[];
   undo: UndoSnapshot[];
+  reactions?: RoomReaction[];
 }
 
 export interface LegalActions {
@@ -242,7 +254,10 @@ export interface LegalActions {
   shortcuts: { label: string; action: 'bet' | 'raise' | 'all-in'; to: number }[];
 }
 
-export type PublicRoomMember = Omit<RoomMember, 'userId' | 'removedAt' | 'lastActiveAt'>;
+export type PublicRoomMember = Omit<
+  RoomMember,
+  'userId' | 'removedAt' | 'lastActiveAt' | 'lastReactionAt'
+>;
 
 export interface RoomView extends Omit<RoomState, 'undo' | 'ledger' | 'members'> {
   members: PublicRoomMember[];
@@ -268,7 +283,9 @@ export type PokerCommand =
   | { type: 'propose-runouts'; handId: string; runs: number }
   | { type: 'agree-runouts'; handId: string }
   | { type: 'reject-runouts'; handId: string }
-  | { type: 'finish-runouts'; handId: string }
+  | { type: 'finish-runouts'; handId: string; runs?: number }
+  | { type: 'rename-self'; name: string }
+  | { type: 'react'; kind: ReactionKind; targetId?: string }
   | { type: 'dissolve-room' }
   | { type: 'confirm-street' }
   | { type: 'settle'; pots: SettlementChoice[] }

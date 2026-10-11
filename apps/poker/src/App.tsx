@@ -35,6 +35,8 @@ import {
 } from '../shared/types';
 import { usePoker } from './api/client';
 import { RunoutPanel } from './RunoutPanel';
+import { RenameButton, RulesButton } from './TableTools';
+import { EmojiPicker, ReactionLayer, ThrowControls } from './Reactions';
 import {
   CollectingChips,
   CommunityCardMotion,
@@ -80,24 +82,10 @@ const streetName = {
 type TableEdge = 'top' | 'bottom' | 'left' | 'right';
 type TableSeatSlot = { edge: TableEdge; along: number };
 
-function tableSeatSlots(count: number, rowsOnly: boolean): TableSeatSlot[] {
+function tableSeatSlots(count: number, hasSelf: boolean): TableSeatSlot[] {
   const slot = (edge: TableEdge, along = 0): TableSeatSlot => ({ edge, along });
-  if (rowsOnly) {
-    const fractions = (n: number) =>
-      n === 1
-        ? [0]
-        : Array.from({ length: n }, (_, i) => ((i / (n - 1)) * 2 - 1) * (n === 4 ? 0.67 : 0.6));
-    const bottom = fractions(Math.max(1, Math.floor(count / 2)))
-      .reverse()
-      .map((x) => slot('bottom', x));
-    const top = fractions(Math.ceil(count / 2)).map((x) => slot('top', x));
-    const around = [...bottom, ...top];
-    const start = bottom.reduce(
-      (best, item, i) => (Math.abs(item.along) < Math.abs(bottom[best].along) ? i : best),
-      0,
-    );
-    return [...around.slice(start), ...around.slice(0, start)].slice(0, count);
-  }
+  // Rotate real seats around the viewer without giving a spectator a pretend home seat.
+  if (!hasSelf && count < 10) return tableSeatSlots(count + 1, true).slice(1);
   const b = (x = 0) => slot('bottom', x);
   const t = (x = 0) => slot('top', x);
   const l = (y = 0) => slot('left', y);
@@ -108,21 +96,21 @@ function tableSeatSlots(count: number, rowsOnly: boolean): TableSeatSlot[] {
     case 2:
       return [b(), t()];
     case 3:
-      return [b(), t(-0.45), t(0.45)];
+      return [b(), t(-0.5), t(0.5)];
     case 4:
-      return [b(), l(), t(), r()];
+      return [b(), l(-1), t(), r(-1)];
     case 5:
-      return [b(), l(), t(-0.45), t(0.45), r()];
+      return [b(), l(-1), t(-0.5), t(0.5), r(-1)];
     case 6:
-      return [b(0.45), b(-0.45), l(), t(-0.45), t(0.45), r()];
+      return [b(), l(1), l(-1), t(), r(-1), r(1)];
     case 7:
-      return [b(), b(-0.63), l(), t(-0.45), t(0.45), r(), b(0.63)];
+      return [b(), l(1), l(-1), t(-0.5), t(0.5), r(-1), r(1)];
     case 8:
-      return [b(), b(-0.63), l(), t(-0.63), t(), t(0.63), r(), b(0.63)];
+      return [b(), l(1), l(-1), t(-1), t(), t(1), r(-1), r(1)];
     case 9:
-      return [b(0.45), b(-0.45), l(0.3), l(-0.3), t(-0.63), t(), t(0.63), r(-0.3), r(0.3)];
+      return [b(), b(-1), l(1), l(-1), t(-0.5), t(0.5), r(-1), r(1), b(1)];
     default:
-      return [b(), b(-0.63), l(0.3), l(-0.3), t(-0.63), t(), t(0.63), r(-0.3), r(0.3), b(0.63)];
+      return [b(), b(-1), l(1), l(-1), t(-1), t(), t(1), r(-1), r(1), b(1)];
   }
 }
 
@@ -597,9 +585,10 @@ function SeatCards({
   const own = room.me.participantId === player.id;
   const shown = publicCards(room, player.id)?.cards ?? [];
   const visible = own || shown.some(Boolean);
+  const smallBacks = !visible && !['SHOWDOWN', 'SETTLED'].includes(hand.phase);
   return (
     <div
-      className={`seat-hole-cards ${state.folded && !visible ? 'folded' : ''} ${own ? 'own' : ''}`}
+      className={`seat-hole-cards ${state.folded && !visible ? 'folded' : ''} ${own ? 'own' : ''} ${smallBacks ? 'small-backs' : ''}`}
       key={`${hand.id}-${player.id}`}
       aria-label={`${player.name} 的底牌`}
     >
@@ -626,10 +615,14 @@ function SeatBet({ room, player }: { room: RoomView; player: Participant }) {
 function PlayerDetailPopover({
   room,
   player,
+  busy,
+  command,
   onClose,
 }: {
   room: RoomView;
   player: Participant;
+  busy: boolean;
+  command: ReturnType<typeof usePoker>['command'];
   onClose: () => void;
 }) {
   const state = room.hand?.players.find((item) => item.participantId === player.id);
@@ -674,6 +667,13 @@ function PlayerDetailPopover({
           </div>
         </dl>
         {statuses.length > 0 && <p>{statuses.join(' · ')}</p>}
+        <ThrowControls
+          room={room}
+          busy={busy}
+          command={command}
+          targetId={player.id}
+          onSent={onClose}
+        />
       </section>
     </>
   );
@@ -1259,20 +1259,64 @@ function TableView({
   const compactTable = Boolean(room.legalActions);
   const selectedPlayer = room.participants.find((item) => item.id === selectedPlayerId);
   const dense = arranged.length >= 7;
-  const narrowRows = tableWidth <= 335 && arranged.length <= 8;
-  const feltWidth = narrowRows ? tableWidth - 12 : Math.min(tableWidth * 0.71, tableWidth - 102);
-  const feltHeight = arranged.length > 8 ? Math.max(feltWidth, 350) : feltWidth;
-  const tableHeight = feltHeight + 98;
   const seatWidth = tableWidth <= 335 ? 60 : Math.min(70, Math.max(64, tableWidth * 0.185));
-  const sideWidth = Math.min(seatWidth, (tableWidth - feltWidth - 6) / 2);
-  const slots = tableSeatSlots(Math.max(arranged.length, 1), narrowRows);
+  const sideWidth = Math.min(seatWidth, Math.max(52, Math.min(60, tableWidth * 0.15)));
+  const feltWidth = tableWidth - 2 * (sideWidth + 3);
+  const slots = tableSeatSlots(Math.max(arranged.length, 1), selfSeated);
+  const normalCardWidth = dense ? 28 : 31;
+  const normalCardHeight = dense ? 39 : 43;
+  const chipWidth = dense ? 38 : 42;
+  const chipHeight = dense ? 22 : 24;
+  const hasCards = online && Boolean(hand);
+  const showingHands = Boolean(
+    hasCards &&
+    (['SHOWDOWN', 'SETTLED'].includes(hand!.phase) ||
+      arranged.some((player) => publicCards(room, player.id)?.cards.some(Boolean))),
+  );
+  const topCount = slots.filter((slot) => slot.edge === 'top').length;
+  const bottomCount = slots.filter((slot) => slot.edge === 'bottom').length;
+  const tightEdge = (count: number) =>
+    hasCards && showingHands && count >= 3 && (normalCardWidth * 2 + 3) * 3 + 28 > feltWidth;
+  const stackTopCards = tightEdge(topCount);
+  const stackBottomCards = tightEdge(bottomCount);
+  const edgeStep = Math.max(seatWidth + 6, normalCardWidth * 2 + 9);
+  const sideLane = hasCards ? ((hand?.communityBoards?.length ?? 0) > 1 ? 90 : 72) : 65;
+  const sideCardHeight = hasCards ? (showingHands ? normalCardHeight * 2 + 3 : 53) : 0;
+  const topCardHeight = hasCards
+    ? showingHands
+      ? stackTopCards
+        ? normalCardHeight * 2 + 3
+        : normalCardHeight
+      : 25
+    : 0;
+  const bottomCardHeight =
+    bottomCount > 1 && hasCards
+      ? stackBottomCards
+        ? normalCardHeight * 2 + 3
+        : showingHands
+          ? normalCardHeight
+          : 25
+      : 0;
+  const edgeCardHeight = Math.max(topCardHeight, bottomCardHeight);
+  const hasSideSeats = slots.some((slot) => slot.edge === 'left' || slot.edge === 'right');
+  // Side lanes clear the central board. At very narrow widths, stack top cards
+  // during reveals and grow vertically instead of moving opponents below the viewer.
+  const feltHeight = Math.ceil(
+    Math.max(
+      feltWidth,
+      hasCards ? 2 * (72 + 9 + normalCardHeight + 4 + chipHeight / 2) : 190,
+      hasSideSeats ? 2 * (sideLane + 13 + edgeCardHeight + sideCardHeight / 2) : 0,
+      hasSideSeats ? 2 * (sideLane + 17 + edgeCardHeight + chipHeight * 1.5) : 0,
+    ),
+  );
+  const tableHeight = feltHeight + 98;
 
   const changeLayout = (next: 'table' | 'list') => {
     setLayout(next);
     localStorage.setItem('poker.tableLayout', next);
   };
   return (
-    <>
+    <div className="poker-reaction-surface">
       <div className="table-toolbar" aria-label="牌桌显示方式">
         <button
           className={layout === 'table' ? 'active' : ''}
@@ -1283,10 +1327,14 @@ function TableView({
         <button className={layout === 'list' ? 'active' : ''} onClick={() => changeLayout('list')}>
           列表
         </button>
+        <span className="table-tool-spacer" />
+        <RenameButton room={room} busy={busy} command={command} />
+        <RulesButton />
+        <EmojiPicker room={room} busy={busy} command={command} />
       </div>
       {layout === 'table' ? (
         <section
-          className={`poker-table ${online ? 'online-mode hand-metadata' : ''} ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
+          className={`poker-table player-ring ${online ? 'online-mode hand-metadata' : ''} ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
           aria-label="牌桌与玩家座位"
           ref={tableRef}
           style={
@@ -1312,33 +1360,50 @@ function TableView({
             const slot = slots[index];
             const side = slot.edge === 'left' || slot.edge === 'right';
             const sign = slot.edge === 'left' || slot.edge === 'top' ? -1 : 1;
-            const cardWidth = dense ? 28 : 31;
-            const cardHeight = dense ? 39 : 43;
-            const chipWidth = dense ? 38 : 42;
-            const chipHeight = dense ? 22 : 24;
+            const own = player.id === room.me.participantId;
+            const smallBacks =
+              hasCards &&
+              !own &&
+              !['SHOWDOWN', 'SETTLED'].includes(hand!.phase) &&
+              !publicCards(room, player.id)?.cards.some(Boolean);
+            const cardWidth = smallBacks ? 18 : normalCardWidth;
+            const cardHeight = smallBacks ? 25 : normalCardHeight;
+            const stackedCards =
+              side ||
+              (slot.edge === 'top' && stackTopCards) ||
+              (slot.edge === 'bottom' && stackBottomCards && !own);
+            const cardGroupWidth = stackedCards ? cardWidth : cardWidth * 2 + 3;
+            const cardGroupHeight = stackedCards ? cardHeight * 2 + 3 : cardHeight;
             const frameWidth = side ? sideWidth : seatWidth;
             // Keep gaps in pixels so a wider viewport does not spread the pieces apart.
             const seatPoint = side
-              ? { x: sign * (feltWidth / 2 + 3 + frameWidth / 2), y: (slot.along * feltHeight) / 2 }
-              : { x: (slot.along * feltWidth) / 2, y: sign * (feltHeight / 2 + 3 + 23) };
-            const cornerInset =
-              !side && Math.abs(slot.along) > 0.6 ? Math.max(0, (230 - feltWidth) / 5) : 0;
+              ? { x: sign * (feltWidth / 2 + 3 + frameWidth / 2), y: slot.along * sideLane }
+              : { x: slot.along * edgeStep, y: sign * (feltHeight / 2 + 3 + 23) };
             const cardPoint = side
-              ? { x: sign * (feltWidth / 2 - 5 - 4 - cardWidth / 2), y: seatPoint.y }
+              ? { x: sign * (feltWidth / 2 - 9 - cardGroupWidth / 2), y: seatPoint.y }
               : {
                   x: seatPoint.x,
-                  y: sign * (feltHeight / 2 - 5 - 4 - cornerInset - cardHeight / 2),
+                  y: sign * (feltHeight / 2 - 9 - cardGroupHeight / 2),
                 };
-            const chipPoint = side
-              ? {
-                  x: cardPoint.x - sign * (cardWidth / 2 + 4 + chipWidth / 2),
-                  y: cardPoint.y + (arranged.length <= 8 ? -26 : 0),
-                }
-              : { x: cardPoint.x, y: cardPoint.y - sign * (cardHeight / 2 + 4 + chipHeight / 2) };
+            const chipPoint = !hasCards
+              ? side
+                ? { x: sign * (feltWidth / 2 - 9 - chipWidth / 2), y: seatPoint.y }
+                : { x: seatPoint.x, y: sign * (feltHeight / 2 - 9 - chipHeight / 2) }
+              : side
+                ? {
+                    x: cardPoint.x - sign * (cardGroupWidth / 2 + 4 + chipWidth / 2),
+                    y: cardPoint.y,
+                  }
+                : {
+                    x: cardPoint.x,
+                    y: cardPoint.y - sign * (cardGroupHeight / 2 + 4 + chipHeight / 2),
+                  };
             const seatStyle = {
               left: tableWidth / 2 + seatPoint.x,
               top: tableHeight / 2 + seatPoint.y,
               width: frameWidth,
+              '--hole-card-width': `${cardWidth}px`,
+              '--hole-card-height': `${cardHeight}px`,
               '--card-x': `${cardPoint.x - seatPoint.x}px`,
               '--card-y': `${cardPoint.y - seatPoint.y}px`,
               '--chip-x': `${chipPoint.x - seatPoint.x}px`,
@@ -1348,7 +1413,8 @@ function TableView({
             } as CSSProperties;
             return (
               <div
-                className={`seat-node ${side ? 'side-seat' : ''} ${(playerResult(room, player.id)?.payout ?? 0) > 0 ? 'has-winner' : ''}`}
+                className={`seat-node ${side ? 'side-seat' : ''} ${stackedCards ? 'stacked-cards' : ''} ${(playerResult(room, player.id)?.payout ?? 0) > 0 ? 'has-winner' : ''}`}
+                data-player-id={player.id}
                 data-edge={slot.edge}
                 key={player.id}
                 style={seatStyle}
@@ -1387,7 +1453,7 @@ function TableView({
           </div>
           <div className="list-players">
             {seated.map((player) => (
-              <div className="list-player-item" key={player.id}>
+              <div className="list-player-item" key={player.id} data-player-id={player.id}>
                 <PlayerListRow
                   room={room}
                   player={player}
@@ -1451,6 +1517,8 @@ function TableView({
         <PlayerDetailPopover
           room={room}
           player={selectedPlayer}
+          busy={busy}
+          command={command}
           onClose={() => setSelectedPlayerId(null)}
         />
       )}
@@ -1491,7 +1559,8 @@ function TableView({
       {hand && !betweenHands && hand.phase !== 'RUNOUT_DECISION' && (
         <ActionBar room={room} busy={busy} command={command} />
       )}
-    </>
+      <ReactionLayer room={room} />
+    </div>
   );
 }
 

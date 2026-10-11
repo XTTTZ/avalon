@@ -4,6 +4,9 @@ import App from './App';
 import './styles.css';
 import './cardFaces.css';
 import './handPresentation.css';
+import './tableTools.css';
+import './reactions.css';
+import './tableLayout.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -215,7 +215,7 @@ export function usePoker() {
           : 3500
         : room?.hand?.phase === 'SETTLED' && room.config.mode === 'online'
           ? 2500
-          : 10_000,
+          : 3000,
     );
     const reconnect = () => {
       if (!document.hidden && navigator.onLine) void sync();

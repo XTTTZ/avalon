@@ -29,6 +29,20 @@ const MAX_TOTAL = 1_000_000_000_000;
 const copy = <T>(value: T): T => structuredClone(value);
 const integer = (value: number) => Number.isSafeInteger(value) && value >= 0;
 const normalizeName = (name: string) => name.normalize('NFKC').trim().replace(/\s+/g, ' ');
+const nameKey = (name: string) => normalizeName(name).toUpperCase().toLowerCase();
+
+function availableName(room: RoomState, name: string, exceptMemberId?: string) {
+  const normalized = normalizeName(name);
+  invalid(normalized.length >= 1 && normalized.length <= 24, '名字须为 1–24 个字符');
+  invalid(
+    !room.members.some(
+      (item) =>
+        !item.removedAt && item.id !== exceptMemberId && nameKey(item.name) === nameKey(normalized),
+    ),
+    '房间里已有同名成员',
+  );
+  return normalized;
+}
 
 function invalid(condition: unknown, message: string): asserts condition {
   if (!condition) throw new PokerError('INVALID', message);
@@ -115,7 +129,18 @@ function finish(room: RoomState, now: number) {
   room.updatedAt = now;
   room.lastActiveAt = now;
   room.expiresAt = now + roomTtl(room);
+  room.reactions = room.reactions?.filter((reaction) => now - reaction.createdAt < 8000).slice(-16);
   if (room.hand) room.hand.revision += 1;
+  return room;
+}
+
+function finishSocial(room: RoomState, now: number) {
+  // Cosmetic actions synchronize without changing the current betting phase or bot deadline.
+  room.version += 1;
+  room.updatedAt = now;
+  room.lastActiveAt = now;
+  room.expiresAt = now + roomTtl(room);
+  room.reactions = room.reactions?.filter((reaction) => now - reaction.createdAt < 8000).slice(-16);
   return room;
 }
 
@@ -279,13 +304,7 @@ export function joinRoom(
     return finish(room, now);
   }
   invalid(room.members.filter((item) => !item.removedAt).length < 32, '房间人数已满');
-  invalid(
-    !room.members.some(
-      (item) =>
-        !item.removedAt && normalizeName(item.name).toLowerCase() === cleanName.toLowerCase(),
-    ),
-    '房间里已有同名成员',
-  );
+  availableName(room, cleanName, existing?.id);
   if (existing?.removedAt) {
     existing.removedAt = undefined;
     existing.joinedAt = now;
@@ -1108,6 +1127,60 @@ export function applyCommand(
   let before: UndoSnapshot | null = null;
   let primary: PokerEvent | null = null;
   switch (command.type) {
+    case 'rename-self': {
+      const name = availableName(room, command.name, actor.id);
+      const previousName = actor.name;
+      actor.name = name;
+      actor.lastActiveAt = now;
+      if (actor.participantId) participant(room, actor.participantId).name = name;
+      // Names are a profile setting, so undoing a wager must not restore an old nickname.
+      for (const frame of room.undo) {
+        const savedMember = frame.members?.find((item) => item.id === actor.id);
+        if (savedMember) savedMember.name = name;
+        const savedPlayer = frame.participants.find((item) => item.id === actor.participantId);
+        if (savedPlayer) savedPlayer.name = name;
+      }
+      if (previousName !== name)
+        event(room, actor.id, 'MEMBER_RENAMED', `${previousName} 改名为 ${name}`, {}, now);
+      return finishSocial(room, now);
+    }
+    case 'react': {
+      invalid(actor.participantId, '请先成为牌桌玩家再发送表情');
+      const targeted = command.kind === 'egg' || command.kind === 'rose';
+      invalid(['smile', 'laugh', 'wow', 'cry', 'egg', 'rose'].includes(command.kind), '表情无效');
+      if (targeted) {
+        invalid(
+          command.targetId &&
+            command.targetId !== actor.participantId &&
+            room.members.some((item) => !item.removedAt && item.participantId === command.targetId),
+          '请选择另一位房间玩家',
+        );
+      } else invalid(command.targetId === undefined, '此表情只能发送给自己');
+      const previous = Math.max(
+        actor.lastReactionAt ?? -Infinity,
+        ...(room.reactions ?? [])
+          .filter((reaction) => reaction.senderId === actor.participantId)
+          .map((reaction) => reaction.createdAt),
+      );
+      if (now - previous < 1200) throw new PokerError('RATE_LIMIT', '表情发送太快了，请稍等');
+      actor.lastReactionAt = now;
+      actor.lastActiveAt = now;
+      for (const frame of room.undo) {
+        const savedMember = frame.members?.find((item) => item.id === actor.id);
+        if (savedMember) savedMember.lastReactionAt = now;
+      }
+      room.reactions = [
+        ...(room.reactions ?? []),
+        {
+          id: randomUUID(),
+          senderId: actor.participantId,
+          kind: command.kind,
+          ...(targeted ? { targetId: command.targetId } : {}),
+          createdAt: now,
+        },
+      ];
+      return finishSocial(room, now);
+    }
     case 'start-hand':
       assertAdmin(room, actor.id);
       before = snapshot(room);
@@ -1153,18 +1226,16 @@ export function applyCommand(
         );
       } else if (command.type === 'finish-runouts') {
         assertAdmin(room, actor.id);
-        invalid(
-          decision.proposedRuns === 1 ||
-            decision.eligibleIds.every((id) => decision.approvedIds.includes(id)),
-          '需要所有未弃牌玩家同意多次跑马',
-        );
+        const runs = command.runs ?? decision.proposedRuns;
+        invalid(Number.isInteger(runs) && runs >= 1 && runs <= decision.maxRuns, '跑马次数无效');
         before = snapshot(room);
+        decision.proposedRuns = runs;
         hand.phase = 'AWAITING_STREET_CONFIRMATION';
         primary = event(
           room,
           actor.id,
           'RUNOUT_CONFIRMED',
-          `荷官确认跑 ${decision.proposedRuns} 次`,
+          `荷官指定跑 ${decision.proposedRuns} 次`,
           {},
           now,
         );
@@ -1186,6 +1257,20 @@ export function applyCommand(
             ? `${actor.name} 选择只跑一次`
             : `${actor.name} 提议跑 ${runs} 次`,
           { participantId: actor.participantId },
+          now,
+        );
+      }
+      if (
+        hand.phase === 'RUNOUT_DECISION' &&
+        decision.eligibleIds.every((id) => decision.approvedIds.includes(id))
+      ) {
+        hand.phase = 'AWAITING_STREET_CONFIRMATION';
+        event(
+          room,
+          actor.id,
+          'RUNOUT_CONFIRMED',
+          `所有留场玩家已同意，自动跑 ${decision.proposedRuns} 次`,
+          {},
           now,
         );
       }
@@ -1221,6 +1306,13 @@ export function applyCommand(
       assertAdmin(room, actor.id);
       const frame = room.undo.pop();
       invalid(frame, '没有可以撤销的操作');
+      const restoredNames = (frame.members ?? room.members)
+        .filter((item) => !item.removedAt)
+        .map((item) => nameKey(item.name));
+      invalid(
+        new Set(restoredNames).size === restoredNames.length,
+        '撤销会恢复同名成员，请先修改当前重复使用的名字',
+      );
       const currentEvents = room.events;
       const targetIndex = currentEvents.findIndex((item) => item.id === frame.eventId);
       const revertedEvents = currentEvents.slice(
@@ -1249,7 +1341,8 @@ export function applyCommand(
         now,
       );
       for (const reverted of revertedEvents)
-        if (reverted.type !== 'CARDS_SHOWN') reverted.revertedBy = undone.id;
+        if (reverted.type !== 'CARDS_SHOWN' && reverted.type !== 'MEMBER_RENAMED')
+          reverted.revertedBy = undone.id;
       room.events = currentEvents;
       if (
         isOnline(room) &&
@@ -1319,7 +1412,9 @@ export function applyCommand(
       invalid(betweenHands(room), '请在两手之间添加机器人');
       invalid(activeSeats(room).length < 10, '牌桌座位已满');
       invalid(room.members.filter((item) => !item.removedAt).length < 32, '房间人数已满');
-      const usedNames = new Set(room.members.map((item) => normalizeName(item.name).toLowerCase()));
+      const usedNames = new Set(
+        room.members.filter((item) => !item.removedAt).map((item) => nameKey(item.name)),
+      );
       let number = 1;
       while (usedNames.has(`机器人 ${number}`)) number += 1;
       const name = `机器人 ${number}`;
@@ -1747,7 +1842,7 @@ export function beginOnlineRunouts(
       .filter((player) => participant(room, player.participantId).isBot)
       .map((player) => player.participantId),
   };
-  event(room, actorMemberId, 'RUNOUT_PROPOSED', '下注结束，等待荷官确认跑马次数', {}, now);
+  event(room, actorMemberId, 'RUNOUT_PROPOSED', '下注结束，可协商跑马或由荷官指定次数', {}, now);
   return finish(room, now);
 }
 
@@ -1774,16 +1869,21 @@ export function settleOnlineHand(
   source: RoomState,
   actorMemberId: string,
   choices: SettlementChoice[],
-  shownHands: ShowdownHand[],
+  privateHands: ShowdownHand[],
   now = Date.now(),
 ) {
   const room = copy(source);
   invalid(isOnline(room), '当前房间不是线上模式');
   invalid(room.hand?.phase === 'SHOWDOWN', '当前不能自动结算');
-  // Evaluation remains private. Only intentionally revealed cards belong in public state.
+  // Evaluate privately; only payout winners, bots and voluntarily shown cards become public.
   room.hand.showdownHands = [];
   settle(room, actorMemberId, choices, now);
-  for (const shown of shownHands) revealCards(room, shown.participantId, shown.cards, [0, 1]);
+  const winnerIds = new Set(
+    room.hand.results?.filter((result) => result.payout > 0).map((result) => result.participantId),
+  );
+  for (const shown of privateHands)
+    if (winnerIds.has(shown.participantId) || participant(room, shown.participantId).isBot)
+      revealCards(room, shown.participantId, shown.cards, [0, 1]);
   moveBustedPlayersToSpectators(room, actorMemberId, now);
   assertChipConservation(room);
   return finish(room, now);
@@ -1856,9 +1956,17 @@ export function showOnlineCards(
   return finish(room, now);
 }
 
-export function projectRoom(room: RoomState, userId: string, holeCards: string[] = []): RoomView {
+export function projectRoom(
+  room: RoomState,
+  userId: string,
+  holeCards: string[] = [],
+  now = Date.now(),
+): RoomView {
   const self = member(room, userId);
   const { undo: _undo, ledger: _ledger, ...publicRoom } = copy(room);
+  publicRoom.reactions = publicRoom.reactions
+    ?.filter((reaction) => now - reaction.createdAt < 8000)
+    .slice(-16);
   if (isOnline(room) && publicRoom.hand) {
     const board = publicRoom.hand.communityCards ?? [];
     const boards = publicRoom.hand.communityBoards?.length
@@ -1891,7 +1999,13 @@ export function projectRoom(room: RoomState, userId: string, holeCards: string[]
     members: publicRoom.members
       .filter((item) => !item.removedAt)
       .map(
-        ({ userId: _userId, removedAt: _removedAt, lastActiveAt: _lastActiveAt, ...item }) => item,
+        ({
+          userId: _userId,
+          removedAt: _removedAt,
+          lastActiveAt: _lastActiveAt,
+          lastReactionAt: _lastReactionAt,
+          ...item
+        }) => item,
       ),
     me: {
       memberId: self.id,
