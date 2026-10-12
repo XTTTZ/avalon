@@ -7,6 +7,7 @@ import './handPresentation.css';
 import './tableTools.css';
 import './reactions.css';
 import './tableLayout.css';
+import './compactControls.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

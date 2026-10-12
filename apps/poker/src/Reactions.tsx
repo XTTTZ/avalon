@@ -21,7 +21,13 @@ interface ControlsProps {
 }
 
 /** The choices open upwards, leaving the compact table controls unchanged. */
-export function EmojiPicker({ room, busy, command }: ControlsProps) {
+export function EmojiPicker({
+  room,
+  busy,
+  command,
+  inline = false,
+  onSent,
+}: ControlsProps & { inline?: boolean; onSent?: () => void }) {
   const [open, setOpen] = useState(false);
   const picker = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -40,28 +46,31 @@ export function EmojiPicker({ room, busy, command }: ControlsProps) {
     };
   }, [open]);
   return (
-    <div className="emoji-picker" ref={picker}>
-      <button
-        className={`secondary emoji-toggle ${open ? 'selected' : ''}`}
-        type="button"
-        aria-label="发送表情"
-        aria-expanded={open}
-        disabled={busy || !room.me.participantId}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span aria-hidden="true">😊</span>
-      </button>
-      {open && (
+    <div className={`emoji-picker ${inline ? 'inline' : ''}`} ref={picker}>
+      {!inline && (
+        <button
+          className={`secondary emoji-toggle ${open ? 'selected' : ''}`}
+          type="button"
+          aria-label="发送表情"
+          aria-expanded={open}
+          disabled={busy || !room.me.participantId}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span aria-hidden="true">😊</span>
+        </button>
+      )}
+      {(inline || open) && (
         <div className="emoji-options" role="group" aria-label="选择表情">
           {selfReactions.map((kind) => (
             <button
               key={kind}
               type="button"
               aria-label={reactionFaces[kind].label}
-              disabled={busy}
+              disabled={busy || !room.me.participantId}
               onClick={() => {
                 setOpen(false);
                 void command({ type: 'react', kind });
+                onSent?.();
               }}
             >
               <span aria-hidden="true">{reactionFaces[kind].emoji}</span>

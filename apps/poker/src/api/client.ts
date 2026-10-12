@@ -15,6 +15,7 @@ const KEY_DEVICE = `${PREFIX}device`;
 const KEY_ROOM = `${PREFIX}room`;
 const KEY_PENDING = `${PREFIX}pending`;
 const HEARTBEAT_INTERVAL = 10 * 60_000;
+const PENDING_NOTICE_DELAY = 3000;
 
 export class ClientError extends Error {
   constructor(
@@ -75,6 +76,18 @@ async function call<T>(request: ApiRequest, token?: string): Promise<T> {
 
 interface Pending {
   request: Extract<ApiRequest, { action: 'command' }>;
+  createdAt: number;
+  roomId?: string;
+}
+
+function restorePending(): Pending | null {
+  const pending = read<Pending>(KEY_PENDING);
+  if (!pending) return null;
+  if (!Number.isFinite(pending.createdAt) || pending.createdAt <= 0) {
+    pending.createdAt = Date.now();
+    write(KEY_PENDING, pending);
+  }
+  return pending;
 }
 
 export function usePoker() {
@@ -83,33 +96,64 @@ export function usePoker() {
   const [busy, setBusy] = useState(false);
   const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('connecting');
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<Pending | null>(restorePending);
+  const [pendingNoticeId, setPendingNoticeId] = useState<string | null>(null);
   const sessionRef = useRef(session);
   const roomRef = useRef(room);
+  const pendingRef = useRef(pending);
+  const commandInFlightRef = useRef<string | null>(null);
   const lastHeartbeatRef = useRef(0);
   const closedRoomIds = useRef(new Set<string>());
   sessionRef.current = session;
   roomRef.current = room;
 
-  const roomClosed = useCallback((closed: { code: string; id?: string }) => {
-    if (closed.id) closedRoomIds.current.add(closed.id);
-    const current = roomRef.current;
-    const savedCode = read<string>(KEY_ROOM);
-    const matchesCurrent = current
-      ? closed.id
-        ? current.id === closed.id
-        : current.code === closed.code
-      : savedCode === closed.code;
-    // An old room's delayed response must not close a newly joined room.
-    if (!matchesCurrent || (savedCode && savedCode !== closed.code)) return;
-    if (current) closedRoomIds.current.add(current.id);
-    localStorage.removeItem(KEY_ROOM);
-    if (read<Pending>(KEY_PENDING)?.request.code === closed.code)
+  const clearPending = useCallback((requestId: string) => {
+    // A late result from an earlier request must not discard a newer command.
+    if (read<Pending>(KEY_PENDING)?.request.requestId === requestId)
       localStorage.removeItem(KEY_PENDING);
-    roomRef.current = null;
-    setRoom(null);
-    setConnection('online');
-    setError('房主已解散房间');
+    if (pendingRef.current?.request.requestId === requestId) {
+      pendingRef.current = null;
+      setPending(null);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!pending) {
+      setPendingNoticeId(null);
+      return;
+    }
+    const remaining = Math.max(0, pending.createdAt + PENDING_NOTICE_DELAY - Date.now());
+    if (remaining === 0) {
+      setPendingNoticeId(pending.request.requestId);
+      return;
+    }
+    const timer = window.setTimeout(() => setPendingNoticeId(pending.request.requestId), remaining);
+    return () => window.clearTimeout(timer);
+  }, [pending]);
+
+  const roomClosed = useCallback(
+    (closed: { code: string; id?: string }) => {
+      if (closed.id) closedRoomIds.current.add(closed.id);
+      const current = roomRef.current;
+      const savedCode = read<string>(KEY_ROOM);
+      const matchesCurrent = current
+        ? closed.id
+          ? current.id === closed.id
+          : current.code === closed.code
+        : savedCode === closed.code;
+      // An old room's delayed response must not close a newly joined room.
+      if (!matchesCurrent || (savedCode && savedCode !== closed.code)) return;
+      if (current) closedRoomIds.current.add(current.id);
+      localStorage.removeItem(KEY_ROOM);
+      const unresolved = pendingRef.current;
+      if (unresolved?.request.code === closed.code) clearPending(unresolved.request.requestId);
+      roomRef.current = null;
+      setRoom(null);
+      setConnection('online');
+      setError('房主已解散房间');
+    },
+    [clearPending],
+  );
 
   const accept = useCallback(
     (view: RoomView) => {
@@ -182,7 +226,11 @@ export function usePoker() {
           return;
         }
         if (syncError instanceof ClientError && syncError.code === 'NOT_FOUND') {
+          if (roomRef.current && roomRef.current.code !== roomCode) return;
           localStorage.removeItem(KEY_ROOM);
+          const unresolved = pendingRef.current;
+          if (unresolved?.request.code === roomCode) clearPending(unresolved.request.requestId);
+          roomRef.current = null;
           setRoom(null);
           setConnection('online');
           setError('房间长期未活跃，已自动解散');
@@ -192,7 +240,7 @@ export function usePoker() {
         setConnection('offline');
       }
     },
-    [accept, login, roomClosed],
+    [accept, login, roomClosed, clearPending],
   );
 
   useEffect(() => {
@@ -279,7 +327,7 @@ export function usePoker() {
     async (value: PokerCommand) => {
       const current = roomRef.current;
       const currentSession = sessionRef.current;
-      if (!current || !currentSession || busy) return false;
+      if (!current || !currentSession || busy || commandInFlightRef.current) return false;
       const request: Extract<ApiRequest, { action: 'command' }> = {
         action: 'command',
         code: current.code,
@@ -288,56 +336,82 @@ export function usePoker() {
         phaseKey: current.phaseKey,
         requestId: randomId(),
       };
-      write(KEY_PENDING, { request } satisfies Pending);
+      const nextPending: Pending = { request, createdAt: Date.now(), roomId: current.id };
+      commandInFlightRef.current = request.requestId;
+      pendingRef.current = nextPending;
+      write(KEY_PENDING, nextPending);
+      setPending(nextPending);
       setBusy(true);
       try {
         const view = await call<RoomView>(request, currentSession.token);
-        localStorage.removeItem(KEY_PENDING);
-        accept(view);
+        clearPending(request.requestId);
+        if (roomRef.current?.id === current.id) accept(view);
         return true;
       } catch (commandError) {
         if (commandError instanceof ClientError && commandError.code === 'ROOM_CLOSED') {
-          roomClosed({ code: request.code });
+          clearPending(request.requestId);
+          roomClosed({ code: request.code, id: current.id });
           return false;
         }
         if (commandError instanceof ClientError && commandError.code !== 'NETWORK')
-          localStorage.removeItem(KEY_PENDING);
+          clearPending(request.requestId);
+        if (roomRef.current?.id !== current.id) return false;
         setError(commandError instanceof Error ? commandError.message : '操作失败');
         if (commandError instanceof ClientError && commandError.code === 'CONFLICT') await sync();
         return false;
       } finally {
-        setBusy(false);
+        if (commandInFlightRef.current === request.requestId) {
+          commandInFlightRef.current = null;
+          setBusy(false);
+        }
       }
     },
-    [accept, busy, sync, roomClosed],
+    [accept, busy, sync, roomClosed, clearPending],
   );
 
   const retryPending = useCallback(async () => {
-    const pending = read<Pending>(KEY_PENDING);
+    const pending = pendingRef.current;
     const currentSession = sessionRef.current;
-    if (!pending || !currentSession) return false;
+    const currentRoom = roomRef.current;
+    if (
+      !pending ||
+      !currentSession ||
+      !currentRoom ||
+      pending.request.code !== currentRoom.code ||
+      (pending.roomId && pending.roomId !== currentRoom.id) ||
+      busy ||
+      commandInFlightRef.current
+    )
+      return false;
+    commandInFlightRef.current = pending.request.requestId;
     setBusy(true);
     try {
       const view = await call<RoomView>(pending.request, currentSession.token);
-      localStorage.removeItem(KEY_PENDING);
-      accept(view);
+      clearPending(pending.request.requestId);
+      if (roomRef.current?.id === currentRoom.id) accept(view);
       return true;
     } catch (pendingError) {
       if (pendingError instanceof ClientError && pendingError.code === 'ROOM_CLOSED') {
-        roomClosed({ code: pending.request.code });
+        clearPending(pending.request.requestId);
+        roomClosed({ code: pending.request.code, id: currentRoom.id });
         return false;
       }
       if (pendingError instanceof ClientError && pendingError.code !== 'NETWORK')
-        localStorage.removeItem(KEY_PENDING);
+        clearPending(pending.request.requestId);
+      if (roomRef.current?.id !== currentRoom.id) return false;
       setError(pendingError instanceof Error ? pendingError.message : '确认操作失败');
       return false;
     } finally {
-      setBusy(false);
+      if (commandInFlightRef.current === pending.request.requestId) {
+        commandInFlightRef.current = null;
+        setBusy(false);
+      }
     }
-  }, [accept, roomClosed]);
+  }, [accept, roomClosed, clearPending, busy]);
 
   const leaveLocal = useCallback(() => {
     localStorage.removeItem(KEY_ROOM);
+    roomRef.current = null;
     setRoom(null);
   }, []);
 
@@ -347,7 +421,13 @@ export function usePoker() {
     busy,
     connection,
     error,
-    hasPending: Boolean(read(KEY_PENDING)),
+    hasPending: Boolean(
+      pending &&
+      room &&
+      pendingNoticeId === pending.request.requestId &&
+      pending.request.code === room.code &&
+      (!pending.roomId || pending.roomId === room.id),
+    ),
     create,
     join,
     command,

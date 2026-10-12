@@ -14,6 +14,7 @@ import {
   Eye,
   History,
   LogOut,
+  List,
   Moon,
   RefreshCw,
   RotateCcw,
@@ -48,6 +49,7 @@ import {
 
 const amount = (value: number) => String(value);
 type Theme = 'light' | 'dark';
+type TableLayout = 'table' | 'list';
 
 function ThemeToggle({
   theme,
@@ -620,18 +622,21 @@ function PlayerDetailPopover({
   onClose,
 }: {
   room: RoomView;
-  player: Participant;
+  player?: Participant;
   busy: boolean;
   command: ReturnType<typeof usePoker>['command'];
   onClose: () => void;
 }) {
-  const state = room.hand?.players.find((item) => item.participantId === player.id);
-  const acting = room.hand?.actorId === player.id;
+  const state = room.hand?.players.find((item) => item.participantId === player?.id);
+  const acting = Boolean(player && room.hand?.actorId === player.id);
+  const own = !player || player.id === room.me.participantId;
+  const name =
+    player?.name ?? room.members.find((item) => item.id === room.me.memberId)?.name ?? '我';
   const statuses = [
     acting ? '行动中' : '',
     state?.folded ? 'Fold' : '',
     state?.allIn ? 'All-in' : '',
-    !player.active ? '暂停参与' : '',
+    !player?.active ? '旁观中' : '',
   ].filter(Boolean);
   return (
     <>
@@ -640,40 +645,53 @@ function PlayerDetailPopover({
         className="player-popover"
         role="dialog"
         aria-modal="true"
-        aria-label={`${player.name} 的筹码详情`}
+        aria-label={own ? '我的资料与筹码' : `${name} 的筹码详情`}
       >
         <header>
           <div>
-            <span className="seat-number">{(player.seat ?? 0) + 1}</span>
-            <strong>{player.name}</strong>
-            <PositionBadges room={room} id={player.id} />
+            {player?.seat !== undefined && player.seat !== null && (
+              <span className="seat-number">{player.seat + 1}</span>
+            )}
+            <strong>{name}</strong>
+            {player && <PositionBadges room={room} id={player.id} />}
           </div>
           <button aria-label="关闭" onClick={onClose}>
             <X size={20} />
           </button>
         </header>
-        <dl>
-          <div>
-            <dt>本街下注</dt>
-            <dd>{amount(state?.streetCommitted ?? 0)}</dd>
-          </div>
-          <div>
-            <dt>本手投入</dt>
-            <dd>{amount(state?.handCommitted ?? 0)}</dd>
-          </div>
-          <div>
-            <dt>剩余筹码</dt>
-            <dd>{amount(player.stack)}</dd>
-          </div>
-        </dl>
+        {player && (
+          <dl>
+            <div>
+              <dt>本街下注</dt>
+              <dd>{amount(state?.streetCommitted ?? 0)}</dd>
+            </div>
+            <div>
+              <dt>本手投入</dt>
+              <dd>{amount(state?.handCommitted ?? 0)}</dd>
+            </div>
+            <div>
+              <dt>剩余筹码</dt>
+              <dd>{amount(player.stack)}</dd>
+            </div>
+          </dl>
+        )}
         {statuses.length > 0 && <p>{statuses.join(' · ')}</p>}
-        <ThrowControls
-          room={room}
-          busy={busy}
-          command={command}
-          targetId={player.id}
-          onSent={onClose}
-        />
+        {own ? (
+          <div className="self-profile-tools">
+            <RenameButton room={room} busy={busy} command={command} />
+            <EmojiPicker room={room} busy={busy} command={command} inline onSent={onClose} />
+          </div>
+        ) : (
+          player && (
+            <ThrowControls
+              room={room}
+              busy={busy}
+              command={command}
+              targetId={player.id}
+              onSent={onClose}
+            />
+          )
+        )}
       </section>
     </>
   );
@@ -1202,10 +1220,12 @@ function TableView({
   room,
   busy,
   command,
+  layout,
 }: {
   room: RoomView;
   busy: boolean;
   command: ReturnType<typeof usePoker>['command'];
+  layout: TableLayout;
 }) {
   const animation = useTableAnimations(room);
   const [selectedBoard, setSelectedBoard] = useState(0);
@@ -1218,9 +1238,6 @@ function TableView({
   const [showPots, setShowPots] = useState(false);
   const tableRef = useRef<HTMLElement>(null);
   const [tableWidth, setTableWidth] = useState(370);
-  const [layout, setLayout] = useState<'table' | 'list'>(() =>
-    localStorage.getItem('poker.tableLayout') === 'list' ? 'list' : 'table',
-  );
   useEffect(() => {
     const table = tableRef.current;
     if (!table) return;
@@ -1311,27 +1328,8 @@ function TableView({
   );
   const tableHeight = feltHeight + 98;
 
-  const changeLayout = (next: 'table' | 'list') => {
-    setLayout(next);
-    localStorage.setItem('poker.tableLayout', next);
-  };
   return (
     <div className="poker-reaction-surface">
-      <div className="table-toolbar" aria-label="牌桌显示方式">
-        <button
-          className={layout === 'table' ? 'active' : ''}
-          onClick={() => changeLayout('table')}
-        >
-          牌桌
-        </button>
-        <button className={layout === 'list' ? 'active' : ''} onClick={() => changeLayout('list')}>
-          列表
-        </button>
-        <span className="table-tool-spacer" />
-        <RenameButton room={room} busy={busy} command={command} />
-        <RulesButton />
-        <EmojiPicker room={room} busy={busy} command={command} />
-      </div>
       {layout === 'table' ? (
         <section
           className={`poker-table player-ring ${online ? 'online-mode hand-metadata' : ''} ${arranged.length >= 5 ? 'crowded' : ''} ${arranged.length >= 7 ? 'dense' : ''} ${arranged.length > 8 ? 'many' : ''} ${compactTable ? 'action-compact' : ''}`}
@@ -2260,6 +2258,19 @@ function Room({
   onToggleTheme: () => void;
 }) {
   const [tab, setTab] = useState<'table' | 'history' | 'summary' | 'manage'>('table');
+  const [layout, setLayout] = useState<TableLayout>(() =>
+    localStorage.getItem('poker.tableLayout') === 'list' ? 'list' : 'table',
+  );
+  const [showSelf, setShowSelf] = useState(false);
+  const self = room.participants.find((player) => player.id === room.me.participantId);
+  const selfSeated = Boolean(self?.active && self.seat !== null);
+  const selfName = room.members.find((member) => member.id === room.me.memberId)?.name ?? '我';
+  const toggleLayout = () => {
+    const next = layout === 'table' ? 'list' : 'table';
+    setLayout(next);
+    localStorage.setItem('poker.tableLayout', next);
+    setTab('table');
+  };
   const [refreshing, setRefreshing] = useState(false);
   const invite = useMemo(
     () => `${location.origin}${import.meta.env.BASE_URL}?room=${room.code}`,
@@ -2282,7 +2293,17 @@ function Room({
     <main className="shell room-shell">
       <header className="room-header">
         <div className="room-identity">
-          <Spade className="room-symbol" size={28} aria-hidden="true" />
+          {selfSeated ? (
+            <Spade className="room-symbol" size={28} aria-hidden="true" />
+          ) : (
+            <button
+              className="self-avatar-entry"
+              aria-label="打开我的资料"
+              onClick={() => setShowSelf(true)}
+            >
+              {Array.from(selfName)[0]}
+            </button>
+          )}
           <div>
             <h1>房间 {room.code}</h1>
             <p className="eyebrow">
@@ -2314,6 +2335,15 @@ function Room({
                 ? '连接中'
                 : '离线'}
           </span>
+          <button
+            className="header-layout-toggle"
+            aria-label={layout === 'table' ? '切换为列表视图' : '切换为牌桌视图'}
+            title={layout === 'table' ? '切换为列表视图' : '切换为牌桌视图'}
+            onClick={toggleLayout}
+          >
+            {layout === 'table' ? <List size={18} /> : <Spade size={18} />}
+          </button>
+          <RulesButton />
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           <button aria-label="邀请" onClick={() => setShowInvite(!showInvite)}>
             <Copy size={18} />
@@ -2323,6 +2353,15 @@ function Room({
           </button>
         </div>
       </header>
+      {showSelf && (
+        <PlayerDetailPopover
+          room={room}
+          player={self}
+          busy={game.busy}
+          command={game.command}
+          onClose={() => setShowSelf(false)}
+        />
+      )}
       {showInvite && (
         <section className="card invite">
           <QRCodeSVG value={invite} size={116} />
@@ -2344,7 +2383,9 @@ function Room({
           牌局已暂停，可核对筹码或撤销操作
         </div>
       )}
-      {tab === 'table' && <TableView room={room} busy={game.busy} command={game.command} />}
+      {tab === 'table' && (
+        <TableView room={room} busy={game.busy} command={game.command} layout={layout} />
+      )}
       {tab === 'history' && <HistoryView room={room} />}
       {tab === 'summary' && <SummaryView room={room} />}
       {tab === 'manage' && <ManageView room={room} busy={game.busy} command={game.command} />}
@@ -2408,8 +2449,12 @@ export default function App() {
         </div>
       )}
       {game.hasPending && (
-        <div className="pending-banner">
-          上次操作结果待确认 <button onClick={() => void game.retryPending()}>立即确认</button>
+        <div className={`pending-indicator ${game.error ? 'with-error' : ''}`} role="status">
+          <RefreshCw size={13} className={game.busy ? 'spinning' : ''} aria-hidden="true" />
+          <span>操作结果待确认</span>
+          <button disabled={game.busy} onClick={() => void game.retryPending()}>
+            {game.busy ? '确认中…' : '重试确认'}
+          </button>
         </div>
       )}
       {game.room ? (
