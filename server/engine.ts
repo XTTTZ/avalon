@@ -752,6 +752,7 @@ export function projectRoom(source: RoomState, userId: string): RoomView {
   const view: RoomView = {
     room: {
       code: source.code,
+      instanceId: source.instanceId ?? `legacy-${source.createdAt}-${source.code}`,
       version: source.version,
       gameId: source.gameId,
       phaseKey: source.phaseKey,

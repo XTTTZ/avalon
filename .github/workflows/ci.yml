@@ -1,19 +1,27 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
   workflow_call:
+    inputs:
+      upload_deployment_artifact:
+        description: Upload the verified production build for the deploy job
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: avalon-ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17-alpine
@@ -29,20 +37,31 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the requested commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@v4
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
           cache: npm
+
       - name: Install dependencies
         run: npm ci
+
       - name: Check formatting
         run: npm run format:check
+
+      - name: Check generated Worker bindings
+        run: npm run worker:types:check
+
       - name: Run unit tests
         run: npm test
-      - name: Test PostgreSQL cleanup and private note retention
+
+      - name: Test PostgreSQL schema and cleanup behavior
         env:
           PGHOST: localhost
           PGPORT: '5432'
@@ -50,25 +69,43 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: local-test-only
         run: psql -X -v ON_ERROR_STOP=1 -f tests/postgres-cleanup.sql
-      - name: Check types and build
+
+      - name: Build the production application
         env:
-          VITE_AUTH_MODE: guest
+          VITE_AUTH_MODE: ${{ vars.AUTH_MODE || 'guest' }}
           VITE_API_URL: /api
         run: npm run build
-      - name: Check independent cloud function dependencies
-        run: npm ci --prefix cloudfunctions/avalon --omit=dev
-      - name: Install test browser
+
+      - name: Validate the Worker bundle
+        run: npx wrangler deploy --dry-run --outdir .wrangler/dry-run
+
+      - name: Install the mobile test browser
         run: npx playwright install --with-deps chromium
+
       - name: Run mobile browser tests
         env:
           VITE_AUTH_MODE: guest
           VITE_API_URL: /api
         run: npm run test:e2e
+
+      - name: Package the verified production build
+        if: inputs.upload_deployment_artifact
+        run: tar -czf "$RUNNER_TEMP/avalon-deployment.tgz" dist
+
+      - name: Upload the verified production build
+        if: inputs.upload_deployment_artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: avalon-deployment-${{ github.sha }}
+          path: ${{ runner.temp }}/avalon-deployment.tgz
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Keep failed browser test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: browser-test-results
+          name: avalon-browser-test-results-${{ github.run_id }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7

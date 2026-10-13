@@ -1,110 +1,76 @@
-# 微信公众号接入：一步一步操作
+# 微信公众号接入
 
-先把公众号作为游戏入口，再启用微信身份登录。菜单外链权限和网页授权权限是两回事，以你公众号后台实际显示为准。
+本地和首次云端验收使用 guest，公众号没有准备好时不会阻碍开发。只有确认公众号具备网页授权权限后，才把生产 `AUTH_MODE` 切为 `wechat`。
 
-## 1. 检查公众号权限
+## 1. 准备公众号
 
-打开 [微信公众平台](https://mp.weixin.qq.com)，扫码登录。没注册时先由你完成注册，确认账号类型、主体和认证要求；不要为了游戏先付认证费，先看所选账号能否提供需要的权限。
+个人主体通常可注册订阅号，但具体网页授权、菜单和接口权限以微信公众平台当前显示为准。登录 [微信公众平台](https://mp.weixin.qq.com/) 后，在“设置与开发 → 接口权限”确认能够使用网页授权，再继续配置。
 
-在后台找到“自定义菜单”和“接口权限”（新版后台可能放在设置/开发相关栏目）。检查：
+记录 AppID。AppSecret 属于长期密钥，只填 Cloudflare Worker Secret 或 GitHub Secret，不要发到聊天、写入 `.env.example`、提交 Git 或放进 `VITE_` 变量。
 
-- 自定义菜单能否选择“跳转网页”，并允许输入你的游戏外链。
-- 是否有“网页授权获取用户基本信息”权限，以及“网页授权域名”配置入口。
+## 2. 配置网页授权域名
 
-| 后台权限                   | 怎么接                                                                           |
-| -------------------------- | -------------------------------------------------------------------------------- |
-| 支持外链菜单，没有网页授权 | 菜单打开游戏，继续用 guest 登录；不获取 OpenID。                                 |
-| 外链菜单和网页授权都有     | 可以完成下面全部步骤，使用 OpenID 登录。                                         |
-| 不允许菜单跳转外链         | 不能照本指南做菜单直达；先核实账号的权限获取方式，朋友测试仍可直接分享游戏网址。 |
-
-菜单能用不代表网页授权也能用。注册了公众号、买了域名，也不等于这两个权限自动开通。
-
-## 2. 先确认网页能打开
-
-你的目标域名是 `avalonxty.site`，但截至 2026-09-18 的检查，它还没有绑定游戏，DNSPod 无解析记录，CloudBase 体验版也不支持自定义域名。先按 [部署操作单](your-deployment.md) 选定接法并完成 HTTPS。
-
-暂时仅测试菜单入口时，可以使用现有网页：
+正式入口为：
 
 ```text
-https://avalon-d4gupz2rs904bec10-1327068090.tcloudbaseapp.com/
+https://www.avalonxty.site/
 ```
 
-默认域名有腾讯云访问提示，并且无法上传到其父域名来证明你拥有该域名；不要将它当作已具备微信网页授权条件的自有域名。后台是否接受菜单链接，以保存结果为准。
-
-等新域名能打开游戏后，再用新网址。下面示例假设最后采用根域名：
+在公众号后台的“公众号设置 → 功能设置”中填写网页授权域名：
 
 ```text
-https://avalonxty.site/
+www.avalonxty.site
 ```
 
-如果最终用的是 `www.avalonxty.site`，后面所有配置也用 `www.avalonxty.site`，不要混用。
+后台若要求下载验证文件，将原文件放到 `public/` 根目录，重新构建和部署后，先确认 `https://www.avalonxty.site/文件名.txt` 原样返回，再点微信后台确认。不要给验证文件加 SPA HTML 或重定向。
 
-## 3. 设置“玩阿瓦隆”菜单
+授权域名只写主机名，不含 `https://`、路径或尾斜杠。业务域名与 JS 接口安全域名只有在使用相应能力时再配置，本应用的基础登录不依赖 JS-SDK。
 
-1. 后台进入“自定义菜单”。
-2. 添加菜单，名称填 `玩阿瓦隆`。
-3. 动作选“跳转网页”。
-4. 地址填步骤 2 中已经能打开的完整 HTTPS 游戏网址。
-5. 预览，确认后在后台发布。
-6. 用手机关注公众号，进入公众号会话，点击该菜单测试。
+## 3. 设置 Worker 配置
 
-先保持 GitHub `AUTH_MODE=guest`、云函数 `ALLOW_GUEST=true`。这样不会因缺少微信授权配置导致朋友进不去。
+Cloudflare Worker `avalon` 使用：
 
-如果没有外链选项，或保存时拒绝游戏网址，不要填假的公众号文章链接，先检查账号权限。菜单更新以微信客户端实际显示为准。
+| 名称                                | 类型     | 值                            |
+| ----------------------------------- | -------- | ----------------------------- |
+| `WECHAT_APP_ID`                     | 普通变量 | 公众号 AppID                  |
+| `WECHAT_APP_SECRET`                 | Secret   | 公众号 AppSecret              |
+| `WECHAT_REDIRECT_URIS`              | 普通变量 | `https://www.avalonxty.site/` |
+| `AUTH_MODE` / 前端 `VITE_AUTH_MODE` | 普通变量 | 验收完成后设为 `wechat`       |
+| `ALLOW_GUEST`                       | 部署变量 | workflow 按 `AUTH_MODE` 生成  |
 
-## 4. 配置网页授权域名（有权限时才做）
+redirect URI 必须与浏览器实际入口精确一致，包含协议、路径和尾斜杠。邀请房间号在 OAuth state 中保存，授权返回后恢复。
 
-1. 后台找到“公众号设置/功能设置 → 网页授权域名”，或从接口权限页进入配置。
-2. 填 `avalonxty.site`，**不带 `https://`、尾斜杠或路径**。
-3. 按后台提示下载验证文件，一般形如 `MP_verify_XXXX.txt`。
-4. 把文件原样放进项目的 `public/` 目录，不改名字和内容。
-5. 提交代码并发布到最终托管网页的平台；仅放在电脑目录里不算验证完成。
-6. 手机或浏览器访问 `https://avalonxty.site/MP_verify_XXXX.txt`，确认直接返回文件原文，而不是游戏 HTML、登录页或错误页。
-7. 回到微信后台确认，直到域名保存成功。
+服务端使用 `snsapi_base` 的 code 换 OpenID。AppSecret、微信 access token 和 OpenID 映射都不会发送给其他玩家；浏览器提交的 OpenID 不可信，也不会被接受。
 
-验证文件是公开域名验证文件，可以放在代码仓库。AppSecret 是秘密，不能放进去。
+## 4. 创建菜单
 
-## 5. 设置 CloudBase 云函数
+在“自定义菜单”创建“阿瓦隆”，动作选“跳转网页”，地址填写：
 
-在公众号后台“基本配置/开发配置”找到 AppID、AppSecret。AppID 可以告诉 Codex；AppSecret 直接填 CloudBase 云函数环境变量，不用发聊天。
+```text
+https://www.avalonxty.site/
+```
 
-打开 CloudBase 环境 `avalon-d4gupz2rs904bec10`，找到云函数 `avalon` 的配置，增量修改：
+先保存并发布菜单，再在真机微信中重新进入公众号查看。菜单发布可能有客户端缓存，测试时可退出公众号会话后重进。
 
-| 环境变量               | 值                                                                  |
-| ---------------------- | ------------------------------------------------------------------- |
-| `WECHAT_APP_ID`        | 你的公众号 AppID                                                    |
-| `WECHAT_APP_SECRET`    | 同一公众号的 AppSecret，仅服务端保存                                |
-| `WECHAT_REDIRECT_URIS` | `https://avalonxty.site/`，有尾斜杠                                 |
-| `ALLOWED_ORIGINS`      | 加上 `https://avalonxty.site`，无尾斜杠；已有 origin 可逗号分隔保留 |
+## 5. 切换与回滚
 
-保留 `SESSION_SECRET`、`IDENTITY_SECRET`、`PG_API_KEY`、数据库配置和清理触发器。不要整页清空重填，也不要把 AppSecret 设置为 `VITE_` 开头的变量。
+1. 在 `workers.dev` 或受控测试入口完成 guest 全流程。
+2. 配好授权域名和 Worker Secret。
+3. 用测试账号验证 OAuth，再构建 `VITE_AUTH_MODE=wechat` 的同一提交。
+4. 更新公众号菜单。
+5. 保留原 `IDENTITY_SECRET` 与 `SESSION_SECRET`。轮换它们会改变玩家身份或让现有会话失效。
+6. OAuth 故障时先回滚 Worker/前端到同一已验证提交；不要删除数据库用户或重置身份密钥。
 
-**本项目不接收公众号消息推送。** 不要把 `/api/avalon` 填进“服务器配置 URL”，不需要为本项目设置消息回调 Token/EncodingAESKey 或开启消息服务器模式。本项目只通过服务端交换网页授权 code 获取 OpenID，没有调用创建菜单或获取公众号全局 access_token 的接口；不需要为了当前流程额外配置这些接口的 IP 白名单。
+## 6. 真机验收
 
-## 6. 切换前端登录方式并发布
+至少使用两个真实微信账号检查：
 
-先确认步骤 4 的域名验证已通过、步骤 5 的变量已保存。
+- 菜单进入、分享邀请和二维码加入；
+- 同一账号关闭微信后重新进入仍识别为原玩家；
+- 锁屏、切后台、切 Wi-Fi/移动网络后恢复当前局；
+- OAuth code 不能重复使用，state/verifier 不匹配会被拒绝；
+- 身份在松手、切后台和离开窗口后立即隐藏；
+- 其他玩家无法看到身份、任务个人票和私人笔记；
+- `www.avalonxty.site` 的证书、API 与 WebSocket 在微信内置浏览器正常。
 
-当前使用 GitHub CloudBase 发布工作流时，打开 [Actions Variables](https://github.com/XTTTZ/avalon/settings/variables/actions)：
-
-| Variable     | 修改成                                               |
-| ------------ | ---------------------------------------------------- |
-| `AUTH_MODE`  | `wechat`                                             |
-| `WEB_ORIGIN` | `https://avalonxty.site`                             |
-| `API_URL`    | 保持实际可访问的 API 地址；网页与 API 可以是不同域名 |
-
-然后运行 `Deploy CloudBase → Run workflow → main`。若网页改由 Cloudflare Pages 托管，需在实际网页构建环境设置 `VITE_AUTH_MODE=wechat`、`VITE_API_URL=现有API地址` 并重新发布；只运行 CloudBase 网站发布不会更新 Pages 网站。
-
-用微信手机打开菜单验证登录。切换期间保留 `ALLOW_GUEST=true` 便于回退；微信授权验收通过、决定只允许微信身份后，再将云函数 `ALLOW_GUEST` 设为 `false`。
-
-## 7. 验收与回退
-
-- 用不同微信账号加入同一新房间，确认不是共用一个玩家。
-- 刷新、锁屏、关闭微信后重新打开同一菜单，确认恢复原座位。
-- 游戏切后台，身份自动隐藏；其他玩家和房主看不到你的私人笔记。
-
-微信身份与旧 guest 身份不同，旧测试房间不会自动迁移；微信登录后开新局。原来的旧网址/guest 座位若还需要继续使用，先别关闭 guest。
-
-若微信登录失败，先恢复前端 `guest` 并重新发布，保持云函数 `ALLOW_GUEST=true`。常见原因是缺少网页授权权限、授权域名未通过、回调根域名/`www` 混用，或者 AppID/AppSecret 来自不同公众号。
-
-把公众号类型、认证状态、AppID 和最终网址告诉 Codex，即可核对接下来的具体步骤；不要发 AppSecret。验证文件可以放入 `public/` 后让 Codex完成发布。
+Playwright 覆盖手机浏览器行为，但不能代替真实微信 OAuth 和 WebView 生命周期测试。

@@ -1,10 +1,8 @@
 node_modules
 .data
 dist
+.wrangler
 cloudfunctions/avalon/index.js
-apps/poker/cloudfunctions/poker/index.js
-apps/poker/package-lock.json
-apps/poker/cloudfunctions/poker/package-lock.json
 package-lock.json
 cloudfunctions/avalon/package-lock.json
 test-results

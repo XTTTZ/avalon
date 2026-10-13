@@ -61,6 +61,8 @@ export interface PublicEvent {
 }
 export interface PublicRoom {
   code: string;
+  /** Stable for the lifetime of a room, including rematches and four-digit code reuse. */
+  instanceId: string;
   version: number;
   gameId: string;
   phaseKey: string;
@@ -153,6 +155,7 @@ export type ApiRequest =
   | { action: 'create'; name: string; config: GameConfig; requestId: string }
   | { action: 'join'; code: string; name: string; requestId: string }
   | { action: 'get'; code: string; version?: number; gameId?: string }
+  | { action: 'realtime.ticket'; code: string; gameId: string }
   | {
       action: 'command';
       code: string;
@@ -166,6 +169,19 @@ export type ApiRequest =
 export interface NotesResult {
   notes: Notes;
   revision: number;
+}
+export interface RealtimeNotice {
+  type: 'room-version';
+  roomInstanceId: string;
+  gameId: string;
+  version: number;
+  closed?: boolean;
+}
+export interface RealtimeTicket {
+  ticket: string;
+  roomInstanceId: string;
+  expiresAt: number;
+  notice: RealtimeNotice;
 }
 export type ApiErrorCode =
   | 'INVALID'

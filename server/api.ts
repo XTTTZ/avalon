@@ -6,6 +6,8 @@ import {
   type GameConfig,
   type Notes,
   type NotesResult,
+  type RealtimeNotice,
+  type RealtimeTicket,
   type RoomView,
 } from '../shared/types.js';
 import { ROLE_META, validateConfig } from '../shared/rules.js';
@@ -24,6 +26,7 @@ import {
 import type { Transaction } from './store.js';
 import { randomRoomCode } from './room-code.js';
 import { noteMatchesRoom } from './room-lifecycle.js';
+import { issueRealtimeTicket } from './realtime.js';
 
 interface CommandReceipt {
   id: string;
@@ -79,6 +82,7 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
     create: ['name', 'config', 'requestId'],
     join: ['code', 'name', 'requestId'],
     get: ['code', 'version', 'gameId'],
+    'realtime.ticket': ['code', 'gameId'],
     command: ['code', 'command', 'expectedVersion', 'phaseKey', 'requestId'],
     'notes.get': ['code'],
     'notes.save': ['code', 'notes', 'expectedRevision'],
@@ -86,7 +90,11 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
   if (typeof request.action !== 'string' || !Object.hasOwn(fields, request.action))
     invalid('未知操作');
   exact(request, ['action', ...fields[request.action]]);
-  if (['join', 'get', 'command', 'notes.get', 'notes.save'].includes(request.action))
+  if (
+    ['join', 'get', 'realtime.ticket', 'command', 'notes.get', 'notes.save'].includes(
+      request.action,
+    )
+  )
     roomCode(request.code);
   if (['create', 'join', 'command'].includes(request.action)) requestId(request.requestId);
   if (request.action === 'create' || request.action === 'join') {
@@ -101,9 +109,9 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
   )
     invalid();
   if (
-    request.action === 'get' &&
+    (request.action === 'get' || request.action === 'realtime.ticket') &&
     request.gameId !== undefined &&
-    (typeof request.gameId !== 'string' || request.gameId.length > 100)
+    (typeof request.gameId !== 'string' || !request.gameId || request.gameId.length > 100)
   )
     invalid();
   if (request.action === 'command') {
@@ -153,6 +161,65 @@ function member(room: RoomState, userId: string) {
   const player = room.players.find((player) => player.userId === userId);
   if (!player) throw new GameError('FORBIDDEN', '你不在此房间中');
   return player;
+}
+
+function realtimeNotice(room: RoomState, closed = false): RealtimeNotice {
+  return {
+    type: 'room-version',
+    roomInstanceId: room.instanceId ?? `legacy-${room.createdAt}-${room.code}`,
+    gameId: room.gameId,
+    version: room.version,
+    ...(closed ? { closed: true } : {}),
+  };
+}
+
+function notifyRoomChange(deps: AuthDeps, notice: RealtimeNotice | undefined) {
+  if (!notice || !deps.onRoomChange) return;
+  try {
+    deps.onRoomChange(notice);
+  } catch (error) {
+    // State is already committed. Realtime is only an acceleration over polling.
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        message: 'Avalon room notification failed',
+        error: error instanceof Error ? error.name : 'unknown',
+      }),
+    );
+  }
+}
+
+export interface RealtimeAuthorization {
+  userId: string;
+  sessionExpiresAt: number;
+  roomInstanceId: string;
+  gameId: string;
+  version: number;
+}
+
+/** Authorize a realtime connection without returning the room or any private projection. */
+export async function authorizeRealtime(
+  code: unknown,
+  gameId: unknown,
+  token: string | undefined,
+  deps: AuthDeps,
+): Promise<RealtimeAuthorization> {
+  roomCode(code);
+  if (typeof gameId !== 'string' || !gameId || gameId.length > 100) invalid();
+  const now = (deps.now ?? Date.now)();
+  const claims = verifyToken(token, deps.auth, now);
+  const record = active(await deps.store.get<RoomRecord>('rooms', code), now);
+  member(record.state, claims.userId);
+  if (record.state.gameId !== gameId)
+    throw new GameError('CONFLICT', '房间状态已更新，请刷新后重试');
+  return {
+    userId: claims.userId,
+    sessionExpiresAt: claims.expiresAt,
+    roomInstanceId:
+      record.state.instanceId ?? `legacy-${record.state.createdAt}-${record.state.code}`,
+    gameId: record.state.gameId,
+    version: record.state.version,
+  };
 }
 function userRate(user: UserRecord, action: string, now: number) {
   user.recentActions = user.recentActions.filter((entry) => entry.at > now - 3_600_000);
@@ -243,6 +310,7 @@ export type ApiResult =
   | { unchanged: true; version: number }
   | { left: true }
   | NotesResult
+  | RealtimeTicket
   | Awaited<ReturnType<typeof guestLogin>>
   | Awaited<ReturnType<typeof startWechat>>;
 export async function handleApi(
@@ -260,6 +328,11 @@ export async function handleApi(
     return finishWechat(request.code, request.state, request.verifier, deps);
   const claims = verifyToken(token, deps.auth, now);
   const userId = claims.userId;
+
+  if (request.action === 'realtime.ticket') {
+    const authorization = await authorizeRealtime(request.code, request.gameId, token, deps);
+    return issueRealtimeTicket(authorization, deps.auth.sessionSecret, now);
+  }
 
   if (request.action === 'get') {
     // Normal polling costs exactly one database document read and no writes.
@@ -311,12 +384,20 @@ export async function handleApi(
         await transaction.set('users', userId, user, user.expiresAt);
         return projectRoom(state, userId);
       });
-      if (result) return result;
+      if (result) {
+        notifyRoomChange(deps, {
+          type: 'room-version',
+          roomInstanceId: result.room.instanceId,
+          gameId: result.room.gameId,
+          version: result.room.version,
+        });
+        return result;
+      }
     }
     throw new GameError('CONFLICT', '暂时无法创建房间，请重试');
   }
   if (request.action === 'join') {
-    return deps.store.transaction(async (transaction) => {
+    const result = await deps.store.transaction(async (transaction) => {
       const user = await ensureUser(transaction, userId, claims.provider, now);
       const hash = digest(request);
       const receipt = user.receipts.find((receipt) => receipt.id === request.requestId);
@@ -330,9 +411,16 @@ export async function handleApi(
       await transaction.set('users', userId, user, user.expiresAt);
       return projectRoom(record.state, userId);
     });
+    notifyRoomChange(deps, {
+      type: 'room-version',
+      roomInstanceId: result.room.instanceId,
+      gameId: result.room.gameId,
+      version: result.room.version,
+    });
+    return result;
   }
   if (request.action === 'command') {
-    return deps.store.transaction(async (transaction) => {
+    const outcome = await deps.store.transaction(async (transaction) => {
       const stored = await transaction.get<RoomRecord>('rooms', request.code);
       const hash = digest(request);
       const receipt = stored?.receipts.find(
@@ -341,12 +429,15 @@ export async function handleApi(
       if (receipt) {
         if (receipt.digest !== hash)
           throw new GameError('CONFLICT', '同一请求编号不能用于不同操作');
-        if (receipt.left) return { left: true } as const;
+        if (receipt.left) return { response: { left: true } as const };
       }
       const record = active(stored, now);
       if (receipt) {
         member(record.state, userId);
-        return projectRoom(record.state, userId);
+        return {
+          response: projectRoom(record.state, userId),
+          notice: realtimeNotice(record.state),
+        };
       }
       member(record.state, userId);
       const concurrent = ['ready', 'teamVote', 'questVote'].includes(request.command.type);
@@ -374,10 +465,21 @@ export async function handleApi(
         await transaction.set('users', userId, user, user.expiresAt);
         for (const leavingUserId of dissolvedUserIds.length ? dissolvedUserIds : [userId])
           await transaction.delete('notes', `${request.code}_${leavingUserId}`);
-        return { left: true } as const;
+        return {
+          response: { left: true } as const,
+          notice: realtimeNotice(
+            record.state,
+            request.command.type === 'dissolve' || record.state.players.length === 0,
+          ),
+        };
       }
-      return projectRoom(record.state, userId);
+      return {
+        response: projectRoom(record.state, userId),
+        notice: realtimeNotice(record.state),
+      };
     });
+    notifyRoomChange(deps, outcome.notice);
+    return outcome.response;
   }
   if (request.action === 'notes.get') {
     const room = await notesRoom(deps.store, request.code, userId, now);

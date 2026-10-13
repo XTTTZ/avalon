@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual, createHash } from 'node:crypto';
-import { GameError, type Session } from '../shared/types.js';
+import { GameError, type RealtimeNotice, type Session } from '../shared/types.js';
 import type { Store, Transaction } from './store.js';
 
 export const DAY = 86_400_000;
@@ -33,6 +33,8 @@ export interface AuthDeps {
   auth: AuthConfig;
   now?: () => number;
   fetch?: typeof fetch;
+  /** Best-effort public version notification, invoked only after a committed room write. */
+  onRoomChange?: (notice: RealtimeNotice) => void;
 }
 export interface Claims {
   userId: string;
@@ -40,7 +42,7 @@ export interface Claims {
   expiresAt: number;
 }
 const invalidAuth = () => new GameError('UNAUTHORIZED', '登录已失效，请重新进入游戏');
-export function readAuthConfig(env: NodeJS.ProcessEnv): AuthConfig {
+export function readAuthConfig(env: Record<string, string | undefined>): AuthConfig {
   const sessionSecret = env.SESSION_SECRET ?? '';
   const identitySecret = env.IDENTITY_SECRET || sessionSecret;
   if (Buffer.byteLength(sessionSecret) < 32 || Buffer.byteLength(identitySecret) < 32) {

@@ -1,12 +1,12 @@
 # Avalon / Poker 拆仓与 Cloudflare + Neon 迁移计划
 
-日期：2026-10-13。状态：**计划待执行**。
+日期：2026-10-13。状态：**执行中**。
 
-本轮只核查代码、云平台文档、可见账号资源，并编写本计划。没有拆目录、修改业务代码或 Actions、创建云资源、修改 DNS、提交、推送或发布。文中的资源名、配置和执行步骤均为拟议方案。
+本文件保留迁移决策和验收标准；实际资源、命令、结果与回滚点记录在执行操作单。开始执行时的源代码基线为 `ee7ae5e`，并已生成本地 Git bundle。任何尚未通过验收的项目仍按“待完成”处理。
 
 ## 1. 推荐方案
 
-将两个应用拆成独立仓库，各自使用一个 **Cloudflare Worker + Static Assets + 房间 Durable Object**，各自连接一个 **Neon Free 项目**。GitHub Actions 负责测试和发布。Neon 保存权威游戏数据；Durable Object（下文简称 DO）处理房间请求、实时连接和 Poker 机器人调度，不另存一套权威牌局。
+将两个应用拆成独立仓库，各自使用一个 **Cloudflare Worker + Static Assets + 房间 Durable Object**，各自连接一个 **Neon Free 项目**。GitHub Actions 负责测试和发布。Neon 保存权威游戏数据；Worker 通过数据库 CAS 函数处理 HTTP 命令，Durable Object（下文简称 DO）处理实时连接、公开版本通知和 Poker 机器人调度，不另存一套权威牌局。
 
 两款游戏都适合接入 WebSocket。建议先保证新平台上的 HTTP 协议、身份和事务正确，再开启 **WebSocket 状态通知 + HTTPS 操作/同步 + 低频轮询兜底**。不必同时重写命令协议。这个方案已经能让双方实时看到行动，并保留现有断线重试能力。
 
@@ -18,11 +18,11 @@
 | GitHub            | `XTTTZ/avalon`                           | `XTTTZ/avalon-poker`                           |
 | 正式网址          | `https://www.avalonxty.site/`            | `https://poker.avalonxty.site/`                |
 | Worker 建议名     | `avalon`                                 | `avalon-poker`                                 |
-| Worker 内的 DO 类 | `AvalonRoom`                             | `PokerRoom`                                    |
+| Worker 内的 DO 类 | `RoomHub`                                | `PokerRoom`                                    |
 | Neon 项目建议名   | `avalon`                                 | `avalon-poker`                                 |
 | Neon 区域         | AWS 新加坡，创建时核实可用性             | AWS 新加坡，创建时核实可用性                   |
-| HTTP API          | 同源 `/api/avalon`                       | 同源 `/api/poker`                              |
-| WebSocket         | 同源 `/ws`                               | 同源 `/ws`                                     |
+| HTTP API          | 同源 `/api`                              | 同源 `/api/poker`                              |
+| WebSocket         | 同源 `/ws`                               | 同源 `/api/poker/ws`                           |
 | 登录              | 保留现有 guest / 微信实现                | 保留现有 guest 实现                            |
 
 DO 类直接导出于各自 Worker，不需要额外部署第三、第四个生产 Worker。两个 Neon 项目各有独立数据库、运行角色、迁移角色和凭据；一个应用不能读取另一个应用的数据。
@@ -112,25 +112,24 @@ Poker 当前为私有仓库，因此 Actions 消耗账号共享的私有仓库�
 ```text
 手机浏览器
   ├─ 静态页面/JS/CSS ──> Worker Static Assets
-  ├─ HTTPS 登录/操作/同步 ──> Worker ──> 本应用房间 DO ──> Neon
-  └─ WebSocket /ws ────────────────> 同一房间 DO
-                                      └─ 提交成功后发送版本通知
+  ├─ HTTPS 登录/操作/同步 ──> Worker ──> Neon CAS 函数
+  └─ WebSocket ─────────────> 本应用房间 DO（只发公开版本通知）
 ```
 
 新增标准 `fetch` / `scheduled` 入口及 `wrangler.jsonc`，保留原业务 API 和领域引擎。前端仍然 React + TypeScript + Vite，不需要换框架。
 
-- 静态文件走 Static Assets，只有 `/api/*`、`/ws`、`/health` 和迁移入口优先走 Worker。禁止 SPA fallback 把 API 错误或 WS 握手变成 HTML。
+- 静态文件走 Static Assets，只有应用 API、WebSocket 和健康检查入口优先走 Worker。禁止 SPA fallback 把 API 错误或 WS 握手变成 HTML。
 - 静态带 hash 文件长期缓存，HTML 短缓存；身份、笔记、牌局和认证响应继续 `no-store`。前后端同源，减少 CORS 和 OPTIONS 开销。[静态资源计费](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/)
 - 使用 `nodejs_compat` 核验 `node:crypto`、Buffer 等；把存储接口与 FileStore/CloudBase SDK 实现分开，生产 bundle 不引入本地文件存储。
-- HTTP 入口只做轻量校验、鉴权和路由；房间计算放在 DO，特别是 Poker 牌型计算和机器人。DO 使用 SQLite 类型的 namespace；SQLite 只保存调度/连接所需的少量辅助信息，权威游戏记录仍在 Neon。
-- 房间 DO 按应用和不可复用的房间实例标识定位，不只用四位房号。登录、建房和房号解析等无房间请求另走轻量服务，并保留数据库唯一性/CAS 校验。新增轻量 `roomCode → instanceId` 解析，在已授权响应中携带非秘密 instanceId，由服务器验证；不能为了路由每次先读取完整 RoomRecord。映射缓存必须处理房间到期、解散和房号复用。
+- HTTP 入口完成校验、鉴权、确定性游戏计算和 Neon CAS 提交；提交成功后才把公开版本号交给房间 DO。Poker 的到期机器人动作由 DO alarm 唤醒同一套服务端规则。DO 使用 SQLite 类型的 namespace，只保存通知和调度所需的少量辅助信息，权威游戏记录仍在 Neon。
+- 房间 DO 按应用和不可复用的房间实例标识定位，不只用四位房号。已授权的 HTTP 响应携带非秘密 instanceId；实时票据在服务端重新验证玩家、房号、实例和对局，处理房间到期、解散和房号复用。
 - 每款每天一次分批清理，逻辑过期仍在读写时立即生效；迁移前确认批量上限、超时和 UTC 定时配置。原生命周期不变，只调整物理清理频率以减少 Neon 唤醒。
 
 ### 5.2 Neon 连接与事务
 
-采用 `@neondatabase/serverless` 的 HTTP SQL 接口，新建 `NeonStore`。现有读快照 → 计算 → `*_commit` 原子核对全部 revision 并写入的协议可以保留；每次 commit 在数据库内完成，不用在多次 HTTP 请求之间假装持有数据库事务。
+采用 Cloudflare 官方支持的 `@neondatabase/serverless` HTTP SQL 接口，新建 `NeonStore`。现有读快照 → 计算 → `*_commit` 原子核对全部 revision 并写入的协议可以保留；每次 commit 在数据库内完成，不用在多次 HTTP 请求之间假装持有数据库事务。
 
-本项目现有提交函数适合单次 SQL 调用，因此先不引入 ORM、Hyperdrive 或数据库长连接。需要交互式 SQL 事务时再单独评估；这里的游戏 WebSocket 与 Neon 数据库 WebSocket 不是同一件事。[Neon serverless driver](https://neon.com/docs/serverless/serverless-driver)
+本项目现有提交函数适合单次 HTTP SQL 调用，因此先不引入 ORM、Hyperdrive 或数据库长连接。Cloudflare 推荐 Hyperdrive 以获得最低 TCP 延迟，同时也明确支持 Neon serverless driver；当前朋友局流量使用后者可少维护两个连接池资源，并继续让 Neon 自动休眠。需要交互式 SQL 事务或实测延迟不达标时再评估 Hyperdrive；这里的游戏 WebSocket 与 Neon 数据库连接不是同一件事。[Cloudflare Neon 集成](https://developers.cloudflare.com/workers/databases/third-party-integrations/neon/) · [Neon serverless driver](https://neon.com/docs/serverless/serverless-driver)
 
 迁移 SQL 要完成以下事项：
 

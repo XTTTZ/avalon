@@ -1,9 +1,15 @@
-name: Deploy CloudBase
+name: Deploy Avalon
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: Apply the idempotent PostgreSQL schema before deployment
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -15,68 +21,121 @@ concurrency:
 jobs:
   verify:
     uses: ./.github/workflows/ci.yml
+    with:
+      upload_deployment_artifact: true
 
   deploy:
     needs: verify
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://www.avalonxty.site
     env:
-      TCB_ENV_ID: ${{ vars.TCB_ENV_ID }}
-      TCB_REGION: ${{ vars.TCB_REGION }}
-      API_URL: ${{ vars.API_URL }}
-      WEB_ORIGIN: ${{ vars.WEB_ORIGIN }}
-      VITE_AUTH_MODE: ${{ vars.AUTH_MODE || 'guest' }}
-      VITE_API_URL: ${{ vars.API_URL }}
-      CLOUD_SMOKE_API_URL: ${{ vars.API_URL }}
-      CLOUD_SMOKE_ORIGIN: ${{ vars.WEB_ORIGIN }}
+      APP_ORIGIN: https://www.avalonxty.site
+      AUTH_MODE: ${{ vars.AUTH_MODE || 'guest' }}
+      WECHAT_APP_ID: ${{ vars.WECHAT_APP_ID }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the verified commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Check release belongs to main
-        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-      - uses: actions/setup-node@v4
+
+      - name: Confirm the deployment commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
           cache: npm
-      - name: Check deployment variables
-        run: node scripts/check-deploy-config.mjs
-      - name: Install dependencies
+
+      - name: Install deployment dependencies
         run: npm ci
-      - name: Build release
-        run: npm run build
-      - name: Install cloud function production dependencies
-        run: npm ci --prefix cloudfunctions/avalon --omit=dev
-      - name: Install pinned CloudBase CLI
-        run: npm install --global @cloudbase/cli@3.8.2
-      - name: Log in with deployment credentials
+
+      - name: Download the verified production build
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: avalon-deployment-${{ github.sha }}
+          path: ${{ runner.temp }}/avalon-deployment
+
+      - name: Restore the verified production build
+        run: |
+          tar -xzf "$RUNNER_TEMP/avalon-deployment/avalon-deployment.tgz"
+          test -f dist/index.html
+
+      - name: Check deployment credentials
         env:
-          CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
-          CLOUDBASE_API_ENDPOINT: https://${{ vars.TCB_ENV_ID }}.${{ vars.TCB_REGION }}.tcb-api.tencentcloudapi.com
-          TCB_SECRET_ID: ${{ secrets.TCB_SECRET_ID }}
-          TCB_SECRET_KEY: ${{ secrets.TCB_SECRET_KEY }}
+          NEON_DIRECT_DATABASE_URL: ${{ secrets.NEON_DIRECT_DATABASE_URL }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          IDENTITY_SECRET: ${{ secrets.IDENTITY_SECRET }}
+          WECHAT_APP_SECRET: ${{ secrets.WECHAT_APP_SECRET }}
         run: |
-          if test -n "$CLOUDBASE_API_KEY"; then
-            tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$TCB_ENV_ID" -r "$TCB_REGION"
-          else
-            test -n "$TCB_SECRET_ID" || { echo 'Missing CLOUDBASE_API_KEY or TCB_SECRET_ID'; exit 1; }
-            test -n "$TCB_SECRET_KEY" || { echo 'Missing repository secret: TCB_SECRET_KEY'; exit 1; }
-            tcb login --apiKeyId "$TCB_SECRET_ID" --apiKey "$TCB_SECRET_KEY"
-          fi
-      - name: Update cloud function code
-        run: tcb fn code update avalon -e "$TCB_ENV_ID" -r "$TCB_REGION" --yes
-      - name: Check API before updating website
+          node --input-type=module <<'JS'
+          const required = [
+            'CLOUDFLARE_ACCOUNT_ID',
+            'CLOUDFLARE_API_TOKEN',
+            'NEON_DIRECT_DATABASE_URL',
+            'NEON_DATABASE_URL',
+            'SESSION_SECRET',
+            'IDENTITY_SECRET',
+          ];
+          if (!['guest', 'wechat'].includes(process.env.AUTH_MODE))
+            throw new Error('AUTH_MODE must be guest or wechat.');
+          if (process.env.AUTH_MODE === 'wechat')
+            required.push('WECHAT_APP_ID', 'WECHAT_APP_SECRET');
+          const missing = required.filter((name) => !process.env[name]?.trim());
+          if (missing.length) throw new Error(`Missing deployment settings: ${missing.join(', ')}`);
+          JS
+
+      - name: Apply PostgreSQL schema
+        if: github.event_name == 'push' || inputs.run_migrations
+        env:
+          NEON_DIRECT_DATABASE_URL: ${{ secrets.NEON_DIRECT_DATABASE_URL }}
         run: |
-          for attempt in 1 2 3 4 5 6; do
-            if npm run smoke:cloud; then exit 0; fi
-            sleep 5
+          for migration in migrations/*.sql; do
+            psql -X --dbname="$NEON_DIRECT_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
-          exit 1
-      - name: Deploy website with backup and verification
-        run: tcb hosting deploy ./dist -e "$TCB_ENV_ID" -r "$TCB_REGION" --safe --verify
-      - name: Check published website and API
+
+      - name: Deploy Worker and static assets
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          IDENTITY_SECRET: ${{ secrets.IDENTITY_SECRET }}
+          WECHAT_APP_SECRET: ${{ secrets.WECHAT_APP_SECRET }}
         run: |
-          curl --fail --silent --show-error --max-time 30 "$WEB_ORIGIN/" > /dev/null
-          npm run smoke:cloud
+          SECRETS_FILE="$RUNNER_TEMP/avalon-worker-secrets.json"
+          export SECRETS_FILE
+          trap 'rm -f "$SECRETS_FILE"' EXIT
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          const secrets = {
+            DATABASE_URL: process.env.NEON_DATABASE_URL,
+            SESSION_SECRET: process.env.SESSION_SECRET,
+            IDENTITY_SECRET: process.env.IDENTITY_SECRET,
+          };
+          if (process.env.AUTH_MODE === 'wechat') {
+            secrets.WECHAT_APP_SECRET = process.env.WECHAT_APP_SECRET;
+          }
+          writeFileSync(process.env.SECRETS_FILE, JSON.stringify(secrets), { mode: 0o600 });
+          JS
+          DEPLOY_ARGS=(
+            --secrets-file "$SECRETS_FILE"
+            --message "$GITHUB_SHA"
+            --var "ALLOW_GUEST:$([[ "$AUTH_MODE" == guest ]] && echo true || echo false)"
+            --var "APP_VERSION:$GITHUB_SHA"
+          )
+          if [[ "$AUTH_MODE" == wechat ]]; then
+            DEPLOY_ARGS+=(--var "WECHAT_APP_ID:$WECHAT_APP_ID")
+          fi
+          npx wrangler deploy "${DEPLOY_ARGS[@]}"
+
+      - name: Check the published site and API
+        run: |
+          curl --fail --silent --show-error --retry 6 --retry-delay 5 --retry-all-errors --max-time 30 "$APP_ORIGIN/" > /dev/null
+          curl --fail --silent --show-error --retry 6 --retry-delay 5 --retry-all-errors --max-time 30 "$APP_ORIGIN/api/health" > /dev/null

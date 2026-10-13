@@ -6,6 +6,8 @@ import type {
   GameConfig,
   Notes,
   NotesResult,
+  RealtimeNotice,
+  RealtimeTicket,
   RoomView,
   Session,
 } from '../shared/types';
@@ -13,6 +15,9 @@ import type {
 const PREFIX = 'avalon.v1.';
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 const AUTH_MODE = import.meta.env.VITE_AUTH_MODE || (import.meta.env.DEV ? 'guest' : 'wechat');
+const REALTIME_ENABLED =
+  import.meta.env.VITE_REALTIME_ENABLED === 'true' ||
+  (import.meta.env.PROD && import.meta.env.VITE_REALTIME_ENABLED !== 'false');
 const KEY_SESSION = PREFIX + 'session';
 const KEY_ROOM = PREFIX + 'room';
 const KEY_DEVICE = PREFIX + 'device';
@@ -187,6 +192,18 @@ function sameMembership(previous: RoomView | null, next: RoomView): boolean {
     previous.self.playerId === next.self.playerId
   );
 }
+function realtimeNotice(value: unknown): value is RealtimeNotice {
+  if (!value || typeof value !== 'object') return false;
+  const notice = value as Partial<RealtimeNotice>;
+  return (
+    notice.type === 'room-version' &&
+    typeof notice.roomInstanceId === 'string' &&
+    typeof notice.gameId === 'string' &&
+    Number.isSafeInteger(notice.version) &&
+    Number(notice.version) >= 1 &&
+    (notice.closed === undefined || typeof notice.closed === 'boolean')
+  );
+}
 export function useGame() {
   const [session, setSession] = useState<Session | null>(null);
   const [view, setView] = useState<RoomView | null>(null);
@@ -205,6 +222,7 @@ export function useGame() {
   const busyRef = useRef(false);
   const pollingRef = useRef(false);
   const bootingRef = useRef(false);
+  const realtimeRef = useRef<WebSocket | null>(null);
   const failures = useRef(0);
   const unchanged = useRef(0);
   const notesRevisionRef = useRef(0);
@@ -451,6 +469,118 @@ export function useGame() {
   }, [initialize]);
 
   useEffect(() => {
+    const expectedInstance = view?.room.instanceId;
+    const expectedGame = view?.room.gameId;
+    if (!REALTIME_ENABLED || !session?.token || !expectedInstance || !expectedGame) return;
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    let retryCount = 0;
+    const closeCurrent = () => {
+      const socket = realtimeRef.current;
+      realtimeRef.current = null;
+      if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'Reconnect');
+    };
+    const schedule = () => {
+      if (cancelled || retryTimer) return;
+      const delay = Math.min(30_000, 1_000 * 2 ** Math.min(retryCount++, 5));
+      retryTimer = setTimeout(
+        () => {
+          retryTimer = undefined;
+          void connect();
+        },
+        delay + Math.floor(Math.random() * 300),
+      );
+    };
+    const connect = async () => {
+      if (cancelled) return;
+      if (document.hidden || !navigator.onLine) {
+        schedule();
+        return;
+      }
+      const currentSession = sessionRef.current;
+      const currentView = viewRef.current;
+      if (
+        !currentSession ||
+        currentSession.token !== session.token ||
+        currentView?.room.instanceId !== expectedInstance ||
+        currentView.room.gameId !== expectedGame
+      )
+        return;
+      try {
+        const ticket = await apiCall<RealtimeTicket>(
+          {
+            action: 'realtime.ticket',
+            code: currentView.room.code,
+            gameId: currentView.room.gameId,
+          },
+          currentSession.token,
+        );
+        if (cancelled) return;
+        const latest = viewRef.current;
+        if (
+          ticket.roomInstanceId !== expectedInstance ||
+          latest?.room.instanceId !== expectedInstance ||
+          latest.room.gameId !== expectedGame
+        )
+          return;
+        if (ticket.notice.version > latest.room.version) void sync();
+
+        const endpoint = new URL('/ws', location.href);
+        endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
+        const socket = new WebSocket(endpoint, ['avalon-v1', `avalon-ticket.${ticket.ticket}`]);
+        realtimeRef.current = socket;
+        socket.onopen = () => {
+          if (!cancelled) retryCount = 0;
+        };
+        socket.onmessage = (event) => {
+          if (cancelled || typeof event.data !== 'string' || event.data === 'pong') return;
+          let notice: unknown;
+          try {
+            notice = JSON.parse(event.data);
+          } catch {
+            socket.close(1008, 'Invalid notice');
+            return;
+          }
+          const current = viewRef.current;
+          if (
+            realtimeNotice(notice) &&
+            current?.room.instanceId === notice.roomInstanceId &&
+            (notice.closed ||
+              notice.gameId !== current.room.gameId ||
+              notice.version > current.room.version)
+          )
+            void sync();
+        };
+        socket.onerror = () => socket.close();
+        socket.onclose = () => {
+          if (realtimeRef.current === socket) realtimeRef.current = null;
+          schedule();
+        };
+      } catch {
+        // Polling remains authoritative and reconnects continue with bounded backoff.
+        schedule();
+      }
+    };
+    const resume = () => {
+      if (cancelled || document.hidden || !navigator.onLine || realtimeRef.current) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = undefined;
+      void connect();
+    };
+    window.addEventListener('online', resume);
+    document.addEventListener('visibilitychange', resume);
+    void connect();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      closeCurrent();
+      window.removeEventListener('online', resume);
+      document.removeEventListener('visibilitychange', resume);
+    };
+  }, [session?.token, view?.room.instanceId, view?.room.gameId, sync]);
+
+  useEffect(() => {
     alive.current = true;
     void initialize();
     let timer: ReturnType<typeof setTimeout>;
@@ -459,10 +589,19 @@ export function useGame() {
       const activePhase =
         current &&
         ['reveal', 'teamVote', 'questVote', 'lady', 'assassination'].includes(current.room.phase);
-      const base = current?.room.phase === 'finished' ? 20000 : activePhase ? 4000 : 8000;
+      const realtimeConnected = realtimeRef.current?.readyState === WebSocket.OPEN;
+      const base = realtimeConnected
+        ? 60_000
+        : current?.room.phase === 'finished'
+          ? 20_000
+          : activePhase
+            ? 4_000
+            : 8_000;
       const delay = failures.current
         ? Math.min(30000, 2000 * 2 ** Math.min(failures.current, 4))
-        : Math.min(20000, base + unchanged.current * 1000);
+        : realtimeConnected
+          ? base
+          : Math.min(20_000, base + unchanged.current * 1000);
       timer = setTimeout(
         async () => {
           if (!document.hidden && navigator.onLine) {

@@ -10,9 +10,14 @@
     "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx --env-file-if-exists=.env.local server/local.ts",
     "dev:web": "vite --host 0.0.0.0",
-    "typecheck": "tsc --noEmit",
-    "build": "npm run typecheck && vite build && npm run build:cloud",
-    "build:cloud": "node scripts/build-cloud.mjs",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
+    "build": "npm run typecheck && vite build",
+    "build:cloudbase": "node scripts/build-cloud.mjs",
+    "worker:types": "wrangler types --include-runtime false",
+    "worker:types:check": "wrangler types --include-runtime false --check",
+    "worker:dev": "npm run build && wrangler dev",
+    "worker:dry-run": "npm run build && wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "worker:deploy": "npm run build && wrangler deploy",
     "preview": "vite preview --host 0.0.0.0",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -20,21 +25,18 @@
     "check": "npm run typecheck && npm test && npm run build",
     "smoke:cloud": "tsx scripts/smoke-cloud.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "dev:poker": "npm run dev --prefix apps/poker",
-    "check:poker": "npm run check --prefix apps/poker",
-    "build:poker": "npm run build --prefix apps/poker",
-    "build:site": "npm run build && npm run build:poker && node scripts/assemble-poker-static.mjs"
+    "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@cloudbase/node-sdk": "^3.16.0",
-    "lodash.set": "file:vendor/avalon-safe-lodash-set-1.0.0.tgz",
+    "@neondatabase/serverless": "1.2.0",
     "lucide-react": "^0.468.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@cloudbase/node-sdk": "^3.16.0",
+    "@cloudflare/workers-types": "^5.20261013.1",
     "@playwright/test": "^1.56.0",
     "@types/node": "^22.19.0",
     "@types/react": "^19.2.0",
@@ -43,11 +45,13 @@
     "concurrently": "^9.2.1",
     "esbuild": "^0.25.12",
     "jsdom": "^29.1.1",
+    "lodash.set": "file:vendor/avalon-safe-lodash-set-1.0.0.tgz",
     "prettier": "^3.9.7",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vite": "^7.2.0",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.1",
+    "wrangler": "^4.150.0"
   },
   "overrides": {
     "axios": "^0.33.0",

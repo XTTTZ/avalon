@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex" />
+    <title>正在打开德州扑克</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+        background: #101418;
+        color: #f4f7f8;
+      }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      main {
+        width: min(100%, 360px);
+        text-align: center;
+      }
+      h1 {
+        font-size: 24px;
+        margin: 0 0 12px;
+      }
+      p {
+        color: #b7c0c7;
+        line-height: 1.6;
+      }
+      a {
+        display: none;
+        min-height: 48px;
+        align-items: center;
+        justify-content: center;
+        margin-top: 20px;
+        border-radius: 12px;
+        background: #e7b44c;
+        color: #17130b;
+        font-weight: 700;
+        text-decoration: none;
+      }
+      iframe {
+        position: fixed;
+        width: 1px;
+        height: 1px;
+        border: 0;
+        opacity: 0;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>正在打开德州扑克</h1>
+      <p id="status">正在迁移本机身份和最近房间…</p>
+      <a id="fallback" rel="noreferrer">直接打开</a>
+    </main>
+    <iframe id="target" title="迁移身份" sandbox="allow-scripts allow-same-origin"></iframe>
+    <script>
+      (() => {
+        const targetOrigin = 'https://poker.avalonxty.site';
+        const keys = [
+          'poker.v1.device',
+          'poker.v1.session',
+          'poker.v1.room',
+          'poker.v1.pending',
+          'poker.publicName',
+          'poker.theme',
+          'poker.tableLayout',
+        ];
+        const room = new URL(location.href).searchParams.get('room');
+        const destination = new URL('/', targetOrigin);
+        if (room && /^\d{4}$/.test(room)) destination.searchParams.set('room', room);
+        const fallback = document.getElementById('fallback');
+        fallback.href = destination.href;
+
+        const values = {};
+        let total = 0;
+        for (const key of keys) {
+          const value = localStorage.getItem(key);
+          if (value === null) continue;
+          total += value.length;
+          if (total <= 512 * 1024) values[key] = value;
+        }
+        if (!Object.keys(values).length) {
+          location.replace(destination.href);
+          return;
+        }
+
+        const nonceBytes = new Uint8Array(24);
+        crypto.getRandomValues(nonceBytes);
+        const nonce = Array.from(nonceBytes, (value) => value.toString(16).padStart(2, '0')).join(
+          '',
+        );
+        const frame = document.getElementById('target');
+        frame.src = `${targetOrigin}/migrate.html#${nonce}`;
+
+        const finish = () => location.replace(destination.href);
+        window.addEventListener('message', (event) => {
+          if (event.origin !== targetOrigin || event.source !== frame.contentWindow) return;
+          if (!event.data || event.data.nonce !== nonce) return;
+          if (event.data.type === 'poker-migration-ready') {
+            frame.contentWindow.postMessage(
+              { type: 'poker-migration-transfer', nonce, values },
+              targetOrigin,
+            );
+          }
+          if (event.data.type === 'poker-migration-complete') finish();
+        });
+
+        window.setTimeout(() => {
+          document.getElementById('status').textContent = '自动迁移未完成，可以重试或直接打开。';
+          fallback.style.display = 'flex';
+        }, 10_000);
+      })();
+    </script>
+  </body>
+</html>

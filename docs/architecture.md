@@ -44,17 +44,17 @@
 
 ## 数据与并发
 
-PostgreSQL 环境使用 `PostgresStore` 与仅 service_role 可调用的 RPC。`avalon_commit` 在一个 SQL 事务中按键排序加锁、核对全部读取的 UUID 修订号、统一提交写入；缺失键同样加锁，删除重建产生新 UUID。冲突最多重跑 8 次，之后返回可重试的 CONFLICT；失败回调只核验读取，不写入。表及 RPC 对 PUBLIC、anon、authenticated 撤销权限，服务端 Key 只存在于云函数中。本地和文档数据库适配器保留原实现。
+生产环境使用 Neon PostgreSQL 和 `NeonStore`。`avalon_commit` 在一个 SQL 事务中按键排序加 advisory lock、核对全部读取的 UUID revision、统一提交写入；缺失键同样加锁，删除重建产生新 revision，防止 ABA。冲突最多重跑 8 次，之后返回可重试的 CONFLICT；失败回调只核验读取，不写入。表与函数撤销 PUBLIC 权限，只授权不继承 `neon_superuser` 的 SQL 角色 `avalon_runtime` 执行有限函数；owner 连接串只用于 migration，运行连接串只存在于 Worker Secret。
 
-`shared/types.ts` 是白名单响应契约；`shared/rules.ts` 只有公开规则。`server/engine.ts` 的 RoomState 含服务端秘密，绝不直接返回。`projectRoom` 按可信 userId 生成公共状态和本人视图。前端没有 CloudBase 数据库 SDK，所有集合客户端读写规则为 false。
+`shared/types.ts` 是白名单响应契约；`shared/rules.ts` 只有公开规则。`server/engine.ts` 的 RoomState 含服务端秘密，绝不直接返回。`projectRoom` 按可信 userId 生成公共状态和本人视图。前端没有数据库驱动，也不能直接连接 Neon。
 
 API 的 `userId` 从服务端签名会话提取，玩家公开 playerId 为独立随机 ID。所有非登录操作检查身份与房间成员资格。房主只有配置、开局、终止等权限，不继承他人秘密与笔记权限。结算才返回全桌角色；任务票的玩家映射在每次任务结束立即删除。
 
-云端 `runTransaction` 串行化并发冲突，房间状态、去重回执、必要的用户记录同事务更新；本地 FileStore 用串行队列和原子文件替换实现同样语义（只用于单进程开发）。普通命令必须匹配版本和 phaseKey；ready/组队票/任务票可在同一阶段并发提交，不允许把旧阶段的票投到新阶段。请求 ID 去重，重复请求重新生成当前权限投影，不返回旧身份快照。票投出后不可修改。任务票原文不写客户端持久存储、应用日志或公开历史。
+存储事务通过单次数据库函数提交，房间状态、去重回执和必要用户记录原子更新；不跨多个 Neon HTTP 请求假装持有事务。本地 FileStore 用串行队列和原子文件替换实现同样语义（只用于单进程开发）。普通命令必须匹配版本和 phaseKey；ready/组队票/任务票可在同一阶段并发提交，不允许把旧阶段的票投到新阶段。请求 ID 去重，重复请求重新生成当前权限投影，不返回旧身份快照。票投出后不可修改。任务票原文不写客户端持久存储、应用日志或公开历史。
 
 新房间号在 `1000–9999` 中使用密码学随机数生成，以房间号为数据库文档主键。同一事务读取该主键、确认不存在、创建房间并保存用户回执；并发碰撞由事务重试处理。占用时换号，最多尝试 32 次后返回可重试错误，绝不使用覆盖写入作为兜底。已过期但尚未清理的文档仍占用号码；清理删除后才可复用。接口继续接受已有六位房间号，不迁移或重编号进行中的对局。
 
-笔记文档按 `roomCode + ownerUserId` 隔离，调用方不能指定 owner；保存要求 revision，避免多窗口静默覆盖。响应严格限制字段和文本长度，拒绝危险对象键与未知命令。房间状态有上限，写操作按用户限频，登录/HTTP 有暖实例速率限制；如需防公网恶意大流量，需结合 CloudBase 网关限流与费用上限，暖实例限流不是全局 DDoS 防护。
+笔记文档按 `roomInstanceId + ownerUserId` 隔离，调用方不能指定 owner；保存要求 revision，避免多窗口静默覆盖。响应严格限制字段和文本长度，拒绝危险对象键与未知命令。房间状态有上限，写操作按用户限频；Worker 暖实例内的限流不是全局防护，公网滥用还需 Cloudflare 账户级规则和资源开关。
 
 公开名字在服务端统一 NFKC、空白与大小写比较，创建/加入/改名时在房间事务内检查唯一性。私人昵称只参与当前观看者的渲染，不进入公开玩家或日志。新操作事件记录公开玩家 ID 和当时公开名，前端按 ID 解析当前昵称；旧纯文本事件只按完整已知句式匹配，歧义时保留原文，避免误替换规则文字。
 
@@ -62,12 +62,16 @@ API 的 `userId` 从服务端签名会话提取，玩家公开 playerId 为独�
 
 ## 登录与恢复
 
-开发或无公众号部署的 guest 由浏览器生成 256 位 deviceSecret，服务端以稳定密钥派生身份；只使用微信授权的环境关闭 guest。微信授权使用精确 HTTPS 回调白名单、随机一次性 state、浏览器 verifier；云函数交换 code，OpenID 与 AppSecret 不发到客户端。会话有效 180 天，每次应用打开验证并刷新；服务器记录最近房间。本地只持久保存会话、deviceSecret、房间位置和 OAuth 临时校验数据，不缓存角色、任务选择或房间秘密。
+开发或无公众号部署的 guest 由浏览器生成 256 位 deviceSecret，服务端以稳定密钥派生身份；只使用微信授权的环境关闭 guest。微信授权使用精确 HTTPS 回调白名单、随机一次性 state、浏览器 verifier；Worker 交换 code，OpenID 与 AppSecret 不发到客户端。会话有效 180 天，每次应用打开验证并刷新；服务器记录最近房间。本地只持久保存会话、deviceSecret、房间位置和 OAuth 临时校验数据，不缓存角色、任务选择或房间秘密。
 
-显式「刷新」读取完整的本人房间投影及本人笔记，保留页面/草稿，重复点击合并，失败可重试，不重复提交命令；前台轮询不写心跳，同时带游戏 ID 与版本减少返回体，防止房号复用后把碰巧相同的版本误当作未更新；后台停止调度，恢复前台/在线立即读状态，失败指数退避最多 30 秒。网络丢失导致结果不确定时，用户可重试同一请求 ID；刷新后直接读取已提交结果。服务器始终防止重复投票与跨阶段重放。清除 guest 浏览器存储无法恢复原 guest 身份；OpenID 则可重新认证。
+显式「刷新」读取完整的本人房间投影及本人笔记，保留页面/草稿，重复点击合并，失败可重试，不重复提交命令。活动页面先通过短时 ticket 连接房间 Durable Object；WebSocket 只通知 `{roomInstanceId, gameId, version}`，收到后再用 HTTP 拉取本人投影。订阅建立后立即复核版本以补首次读取和握手之间的窗口；重复、乱序和漏通知都由版本比较处理。后台停止连接和轮询，恢复前台/在线立即读状态。WS 失败使用有上限的退避和低频 polling，正常连接也保留稀疏 HTTP 核对。网络丢失导致结果不确定时，用户可重试同一 requestId；服务器始终防止重复投票与跨阶段重放。
+
+## Worker 与实时边界
+
+Cloudflare Worker 同时提供 Static Assets、HTTP API、`/api/health` 健康检查和 Durable Object 路由。静态资源不经过动态逻辑；`/api/*` 与 `/ws` 优先进入 Worker，避免 SPA fallback 把错误接口返回为 HTML。DO 使用 WebSocket Hibernation API，连接附件只保存最少身份，空闲时没有定时循环。Neon commit 成功后才广播版本；广播失败不得把已成功命令改成失败，也不得触发新 requestId 重放。
+
+权威状态只在 Neon。DO 可以缓存版本和短时 ticket，不保存另一份 RoomState。所有写入口、alarm 和兼容 HTTP 路径继续执行数据库 CAS；房号路由必须同时验证不可复用 instanceId，防止四位房号复用串房。一个玩家和一个房间的连接数有上限，被踢、离开、解散、过期或授权到期后关闭连接。
 
 ## 部署后仍须验收
 
-CloudBase Node SDK 当前依赖的独立 `lodash.set` 已停止维护，项目用 `vendor/lodash-set` 的兼容入口调用维护中的 lodash `set`。根项目与云函数包同时覆盖 axios / lodash.unset 到已修复版本，锁文件包含准确依赖。更新 SDK 时须保留或重新评估这些覆盖，并运行 `npm audit` 和存储适配器测试；不要直接使用未覆盖的临时云函数依赖清单。
-
-自动化覆盖本地同源 API、纯状态机、CloudBase 存储适配器合同与浏览器流程。云数据库实际事务、网关 CORS、真实公众号权限、域名验证和微信 WebView 生命周期必须在自己的环境验证。仓库没有云凭据，也没有声称已在真实微信/云环境上线。
+自动化覆盖本地同源 API、纯状态机、Neon adapter、Worker runtime、WebSocket 恢复和浏览器流程。真实 Neon 事务、DO 休眠唤醒、Cloudflare 自定义域名、公众号权限和微信 WebView 生命周期仍须在目标环境验证。生产验收还需记录 Worker/DO 请求与 CPU、Neon compute/存储/出站，确认朋友局规模落在免费额度预算内。

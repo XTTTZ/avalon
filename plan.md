@@ -1,8 +1,8 @@
 # 阿瓦隆手机版 Web App 实施计划
 
-> **当前待执行计划（2026-10-13）：**[Avalon / Poker 拆仓、Cloudflare + Neon 部署及 WebSocket 评估](docs/repository-split-cloudflare-neon-plan.md)。本轮仅编写计划，尚未拆仓、推送或变更线上资源；下方保留历史实施记录。
+> **当前执行计划（2026-10-13）：**[Avalon / Poker 拆仓、Cloudflare + Neon 部署及 WebSocket 评估](docs/repository-split-cloudflare-neon-plan.md)。实际资源和逐项进度见 [迁移执行记录](docs/cloudflare-neon-migration-runbook.md)；下方保留原应用的历史实施记录。
 
-> 并列应用：德州扑克数字筹码 / 荷官辅助应用的设计、实施状态与云端验收清单见 [apps/poker/plan.md](apps/poker/plan.md)（2026-09-25）。
+> 德州扑克已经拆到独立仓库 [`XTTTZ/avalon-poker`](https://github.com/XTTTZ/avalon-poker)。
 
 ## 目标与交付
 
