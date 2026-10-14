@@ -118,7 +118,7 @@ workflow 会追加 `wrangler deploy --domain www.avalonxty.site`，并同时检�
 - [x] Neon 项目、production branch、数据库和受限运行角色已建立。
 - [x] workers.dev 预览完成 HTTP、WebSocket、鉴权、CORS 和隐私边界验证。
 - [x] 自动部署支持 DNS 切换前只发布 workers.dev。
-- [ ] 将完整 Variables 与 Secrets 写入 GitHub。
-- [ ] 运行一次新的 `main` 自动部署并验证 workers.dev。
+- [x] 将完整 Variables 与 Secrets 写入 GitHub。
+- [x] 运行一次新的 `main` 自动部署并验证 workers.dev。
 - [ ] 用户切换 nameserver，等待 Cloudflare zone active。
 - [ ] 启用 custom domain 并完成正式域名验收。
