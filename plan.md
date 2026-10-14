@@ -23,8 +23,8 @@
 
 - [x] 配置 GitHub Actions 的 Cloudflare、Neon 和应用密钥。
 - [x] 在 `CUSTOM_DOMAIN_ENABLED=false` 下从 Actions 发布并验收 workers.dev。
-- [ ] 将域名 nameserver 切换到 Cloudflare，等待 zone active。
-- [ ] 设置 `CUSTOM_DOMAIN_ENABLED=true`，绑定并验收 `www.avalonxty.site`。
+- [x] 将域名 nameserver 切换到 Cloudflare，等待 zone active。
+- [x] 设置 `CUSTOM_DOMAIN_ENABLED=true`，绑定并验收 `www.avalonxty.site`。
 - [ ] 记录实际 Worker、Durable Object 与 Neon 免费额度消耗。
 
 ## 确定的规则边界

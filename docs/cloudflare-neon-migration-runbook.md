@@ -120,5 +120,5 @@ workflow 会追加 `wrangler deploy --domain www.avalonxty.site`，并同时检�
 - [x] 自动部署支持 DNS 切换前只发布 workers.dev。
 - [x] 将完整 Variables 与 Secrets 写入 GitHub。
 - [x] 运行一次新的 `main` 自动部署并验证 workers.dev。
-- [ ] 用户切换 nameserver，等待 Cloudflare zone active。
-- [ ] 启用 custom domain 并完成正式域名验收。
+- [x] 用户切换 nameserver，等待 Cloudflare zone active。
+- [x] 启用 custom domain 并完成正式域名验收。
