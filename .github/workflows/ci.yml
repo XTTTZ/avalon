@@ -72,7 +72,6 @@ jobs:
 
       - name: Build the production application
         env:
-          VITE_AUTH_MODE: ${{ vars.AUTH_MODE || 'guest' }}
           VITE_API_URL: /api
         run: npm run build
 
@@ -84,7 +83,6 @@ jobs:
 
       - name: Run mobile browser tests
         env:
-          VITE_AUTH_MODE: guest
           VITE_API_URL: /api
         run: npm run test:e2e
 

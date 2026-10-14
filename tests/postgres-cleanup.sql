@@ -13,6 +13,8 @@ END
 $$;
 
 \ir ../migrations/0001_avalon.sql
+-- Production deploys reapply migrations, so the schema must remain idempotent.
+\ir ../migrations/0001_avalon.sql
 
 BEGIN;
 CREATE TEMP TABLE cleanup_results (step text PRIMARY KEY, deleted integer NOT NULL);

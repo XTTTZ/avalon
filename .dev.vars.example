@@ -1,4 +1,3 @@
 DATABASE_URL=postgresql://avalon_runtime:replace-me@example.neon.tech/avalon?sslmode=require
 SESSION_SECRET=replace-with-at-least-32-random-bytes
 IDENTITY_SECRET=replace-with-stable-at-least-32-random-bytes
-# WECHAT_APP_SECRET=only-needed-when-guest-login-is-disabled

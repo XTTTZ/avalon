@@ -1,48 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { CloudBaseStore, FileStore, type DatabaseLike, type Store } from '../server/store';
+import { FileStore } from '../server/store';
 
-/** SDK-shaped adapter double. Business cleanup also runs against real SQL in CI. */
-function documentStore(): Store {
-  const records = new Map<string, { value: unknown; expiresAt: number }>();
-  const db = {
-    command: { lte: (n: number) => n },
-    collection: (collection: string) => ({
-      doc: (id: string) => ({
-        get: async () => ({ data: records.get(`${collection}/${id}`) ?? null }),
-        set: async (value: { value: unknown; expiresAt: number }) => {
-          records.set(`${collection}/${id}`, structuredClone(value));
-          return {};
-        },
-        delete: async () => {
-          records.delete(`${collection}/${id}`);
-          return {};
-        },
-      }),
-      where: ({ expiresAt }: { expiresAt: number }) => ({
-        limit: (limit: number) => ({
-          get: async () => ({
-            data: [...records.entries()]
-              .filter(
-                ([key, value]) => key.startsWith(`${collection}/`) && value.expiresAt <= expiresAt,
-              )
-              .slice(0, limit)
-              .map(([key, value]) => ({ _id: key.slice(collection.length + 1), ...value })),
-          }),
-        }),
-      }),
-    }),
-    runTransaction: async <T>(work: (transaction: DatabaseLike) => Promise<T>) =>
-      work(db as unknown as DatabaseLike),
-  };
-  return new CloudBaseStore(db as unknown as DatabaseLike);
-}
-
-describe.each([
-  ['local file', () => new FileStore(null)],
-  ['CloudBase document', documentStore],
-] as const)('%s room cleanup', (_name, makeStore) => {
+describe('local file room cleanup', () => {
   it('renews expired notes only for members of the same active room instance', async () => {
-    const store = makeStore();
+    const store = new FileStore(null);
     const state = {
       instanceId: 'new-room',
       createdAt: 10,
@@ -76,7 +37,7 @@ describe.each([
   });
 
   it('preserves legacy notes while never reviving them inside a new-format room', async () => {
-    const store = makeStore();
+    const store = new FileStore(null);
     const state = { createdAt: 10, expiresAt: 500, players: [{ userId: 'u' }] };
     const note = { expiresAt: 100, revision: 2, notes: {} };
     await store.transaction(async (tx) => {

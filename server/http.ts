@@ -106,7 +106,7 @@ export function createHttpHandler(deps: AuthDeps, options: HttpOptions) {
         error instanceof GameError
           ? error
           : new GameError('INTERNAL', '服务暂时不可用，请稍后重试');
-      // Never log payloads, tokens, ballots, OAuth URLs, or database state.
+      // Never log payloads, tokens, ballots, private notes, or database state.
       if (!(error instanceof GameError))
         console.error('Avalon request failed', error instanceof Error ? error.name : 'unknown');
       if (safe.code === 'RATE_LIMIT') headers['Retry-After'] = '60';

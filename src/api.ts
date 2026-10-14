@@ -14,14 +14,12 @@ import type {
 
 const PREFIX = 'avalon.v1.';
 const API_URL = import.meta.env.VITE_API_URL || '/api';
-const AUTH_MODE = import.meta.env.VITE_AUTH_MODE || (import.meta.env.DEV ? 'guest' : 'wechat');
 const REALTIME_ENABLED =
   import.meta.env.VITE_REALTIME_ENABLED === 'true' ||
   (import.meta.env.PROD && import.meta.env.VITE_REALTIME_ENABLED !== 'false');
 const KEY_SESSION = PREFIX + 'session';
 const KEY_ROOM = PREFIX + 'room';
 const KEY_DEVICE = PREFIX + 'device';
-const KEY_OAUTH = PREFIX + 'oauth';
 export class ClientError extends Error {
   constructor(
     public code: ApiErrorCode | 'NETWORK',
@@ -104,43 +102,11 @@ export async function apiCall<T>(request: ApiRequest, token?: string): Promise<T
 
 let authenticating: Promise<Session> | null = null;
 async function authenticate(): Promise<Session> {
-  // Also coalesce event-driven retry / mount work; OAuth codes are single use.
+  // Also coalesce event-driven retry and mount work.
   if (authenticating) return authenticating;
   authenticating = (async () => {
-    const url = new URL(location.href);
-    const code = url.searchParams.get('code');
-    const state = url.searchParams.get('state');
-    if (AUTH_MODE === 'wechat' && code) {
-      const saved = read<{ verifier: string; state: string; room: string | null }>(KEY_OAUTH);
-      if (!saved || !state || state !== saved.state)
-        throw new Error('微信登录校验失败，请从公众号菜单重新打开。');
-      let result: Session;
-      try {
-        result = await apiCall<Session>({
-          action: 'auth.wechat.finish',
-          code,
-          state,
-          verifier: saved.verifier,
-        });
-      } catch (error) {
-        // A code might already have been redeemed before a lost response. Restart a new flow on retry.
-        url.searchParams.delete('code');
-        url.searchParams.delete('state');
-        if (saved.room) url.searchParams.set('room', saved.room);
-        history.replaceState(null, '', url);
-        remove(KEY_OAUTH);
-        throw error;
-      }
-      remember(KEY_SESSION, result);
-      remove(KEY_OAUTH);
-      url.searchParams.delete('code');
-      url.searchParams.delete('state');
-      if (saved.room) url.searchParams.set('room', saved.room);
-      history.replaceState(null, '', url);
-      return result;
-    }
     const saved = read<Session>(KEY_SESSION);
-    if (saved?.token && saved.expiresAt > Date.now() && saved.provider === AUTH_MODE) {
+    if (saved?.token && saved.expiresAt > Date.now() && saved.provider === 'guest') {
       try {
         const renewed = await apiCall<Session>({ action: 'session' }, saved.token);
         remember(KEY_SESSION, renewed);
@@ -151,30 +117,14 @@ async function authenticate(): Promise<Session> {
         remove(KEY_SESSION);
       }
     }
-    if (AUTH_MODE === 'guest') {
-      let device = read<string>(KEY_DEVICE);
-      if (!device) {
-        device = randomId();
-        write(KEY_DEVICE, device);
-      }
-      const result = await apiCall<Session>({ action: 'auth.guest', deviceSecret: device });
-      remember(KEY_SESSION, result);
-      return result;
+    let device = read<string>(KEY_DEVICE);
+    if (!device) {
+      device = randomId();
+      write(KEY_DEVICE, device);
     }
-    if (!/MicroMessenger/i.test(navigator.userAgent))
-      throw new Error('请在微信中打开此网页，使用公众号身份登录。');
-    const verifier = randomId();
-    const redirectUri = location.origin + location.pathname;
-    const start = await apiCall<{ url: string; state: string }>({
-      action: 'auth.wechat.start',
-      redirectUri,
-      verifier,
-    });
-    write(KEY_OAUTH, { verifier, state: start.state, room: url.searchParams.get('room') });
-    location.assign(start.url);
-    return new Promise<Session>(() => {
-      /* OAuth navigation takes over */
-    });
+    const result = await apiCall<Session>({ action: 'auth.guest', deviceSecret: device });
+    remember(KEY_SESSION, result);
+    return result;
   })();
   try {
     return await authenticating;

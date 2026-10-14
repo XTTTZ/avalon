@@ -9,8 +9,6 @@ interface WorkerEnv extends Env {
   DATABASE_URL: string;
   SESSION_SECRET: string;
   IDENTITY_SECRET: string;
-  WECHAT_APP_ID?: string;
-  WECHAT_APP_SECRET?: string;
   APP_VERSION?: string;
 }
 
@@ -255,10 +253,6 @@ function createDeps(env: WorkerEnv, context: ExecutionContext): AuthDeps {
     auth: readAuthConfig({
       SESSION_SECRET: env.SESSION_SECRET,
       IDENTITY_SECRET: env.IDENTITY_SECRET,
-      ALLOW_GUEST: env.ALLOW_GUEST,
-      WECHAT_APP_ID: env.WECHAT_APP_ID,
-      WECHAT_APP_SECRET: env.WECHAT_APP_SECRET,
-      WECHAT_REDIRECT_URIS: env.WECHAT_REDIRECT_URIS,
     }),
     onRoomChange: (notice) => {
       const stub = env.ROOM_HUB.getByName(notice.roomInstanceId, { locationHint: 'apac-se' });

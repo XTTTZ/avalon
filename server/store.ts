@@ -2,8 +2,7 @@ import { mkdir, readFile, rename, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { retainedNoteExpiry, type ExpiringNote, type NoteRoom } from './room-lifecycle.js';
 
-export type Collection = 'rooms' | 'users' | 'notes' | 'oauth';
-export const COLLECTIONS: Collection[] = ['rooms', 'users', 'notes', 'oauth'];
+export type Collection = 'rooms' | 'users' | 'notes';
 export interface Transaction {
   get<T>(collection: Collection, id: string): Promise<T | null>;
   set<T>(collection: Collection, id: string, value: T, expiresAt: number): Promise<void>;
@@ -128,126 +127,5 @@ export class FileStore implements Store {
       if (expired.length) await this.persist(draft);
       return deleted;
     });
-  }
-}
-
-export interface DatabaseDocument {
-  get(): Promise<{
-    data: Record<string, unknown>[] | Record<string, unknown> | null;
-    code?: string;
-  }>;
-  set(value: Record<string, unknown>): Promise<unknown>;
-  delete?(): Promise<unknown>;
-  remove?(): Promise<unknown>;
-}
-interface DatabaseCollection {
-  doc(id: string): DatabaseDocument;
-  where(filter: Record<string, unknown>): {
-    limit(count: number): { get(): Promise<{ data: { _id: string }[] }> };
-  };
-}
-export interface DatabaseLike {
-  collection(name: string): DatabaseCollection;
-  runTransaction<T>(callback: (transaction: DatabaseLike) => Promise<T>): Promise<T>;
-  command: { lte(value: number): unknown };
-}
-const collectionName = (collection: Collection) => `avalon_${collection}`;
-function checkDatabaseResult(result: unknown) {
-  if (result && typeof result === 'object' && 'code' in result && result.code) {
-    // The SDK may return {code} rather than throw. Preserve conflict codes so
-    // runTransaction can retry, but do not propagate database details to HTTP.
-    const error = new Error('Database operation failed') as Error & { code: unknown };
-    error.code = result.code;
-    throw error;
-  }
-}
-
-/** CloudBase server SDK adapter; no browser database SDK is used anywhere. */
-export class CloudBaseStore implements Store {
-  constructor(private readonly db: DatabaseLike) {}
-  private adapter(db: DatabaseLike): Transaction {
-    return {
-      get: async <T>(collection: Collection, id: string) => {
-        const result = await db.collection(collectionName(collection)).doc(id).get();
-        checkDatabaseResult(result);
-        const document = Array.isArray(result.data) ? result.data[0] : result.data;
-        return document ? (document.value as T) : null;
-      },
-      set: async (collection, id, value, expiresAt) => {
-        checkDatabaseResult(
-          await db.collection(collectionName(collection)).doc(id).set({ value, expiresAt }),
-        );
-      },
-      delete: async (collection, id) => {
-        const document = db.collection(collectionName(collection)).doc(id);
-        if (document.delete) checkDatabaseResult(await document.delete());
-        else if (document.remove) checkDatabaseResult(await document.remove());
-        else throw new Error('Database delete unavailable');
-      },
-    };
-  }
-  get<T>(collection: Collection, id: string) {
-    return this.adapter(this.db).get<T>(collection, id);
-  }
-  transaction<T>(work: (transaction: Transaction) => Promise<T>): Promise<T> {
-    return this.db.runTransaction((transaction) => work(this.adapter(transaction)));
-  }
-  async cleanup(now: number, limit = 200) {
-    let count = 0;
-    for (const collection of COLLECTIONS) {
-      if (count >= limit) break;
-      const result = await this.db
-        .collection(collectionName(collection))
-        .where({ expiresAt: this.db.command.lte(now) })
-        .limit(Math.min(100, limit - count))
-        .get();
-      checkDatabaseResult(result);
-      for (const document of result.data) {
-        // Recheck inside the transaction: a user may have renewed since the query.
-        const deleted = await this.db.runTransaction(async (transaction) => {
-          const ref = transaction.collection(collectionName(collection)).doc(document._id);
-          const read = await ref.get();
-          checkDatabaseResult(read);
-          const current = Array.isArray(read.data) ? read.data[0] : read.data;
-          if (current && Number(current.expiresAt) <= now) {
-            if (collection === 'notes') {
-              const [code, ...userParts] = document._id.split('_');
-              const parent = await this.adapter(transaction).get<{ state: NoteRoom }>(
-                'rooms',
-                code,
-              );
-              const expiresAt = retainedNoteExpiry(
-                current.value as unknown as ExpiringNote,
-                parent?.state,
-                userParts.join('_'),
-                now,
-              );
-              if (expiresAt !== null) {
-                checkDatabaseResult(
-                  await ref.set({
-                    value: {
-                      ...(current.value as Record<string, unknown>),
-                      expiresAt,
-                      ...(parent!.state.instanceId
-                        ? { roomInstanceId: parent!.state.instanceId }
-                        : {}),
-                      roomCreatedAt: parent!.state.createdAt,
-                    },
-                    expiresAt,
-                  }),
-                );
-                return false;
-              }
-            }
-            if (ref.delete) checkDatabaseResult(await ref.delete());
-            else checkDatabaseResult(await ref.remove!());
-            return true;
-          }
-          return false;
-        });
-        if (deleted) count++;
-      }
-    }
-    return count;
   }
 }

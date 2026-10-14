@@ -2,8 +2,6 @@ node_modules
 .data
 dist
 .wrangler
-cloudfunctions/avalon/index.js
 package-lock.json
-cloudfunctions/avalon/package-lock.json
 test-results
 playwright-report

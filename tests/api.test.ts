@@ -7,7 +7,7 @@ import { standardConfig } from '../shared/rules';
 import type { ApiRequest, GameCommand, RoomView, Session, NotesResult } from '../shared/types';
 import { handleApi, type RoomRecord } from '../server/api';
 import { readAuthConfig, type AuthDeps } from '../server/auth';
-import { CloudBaseStore, FileStore, type DatabaseLike } from '../server/store';
+import { FileStore } from '../server/store';
 import { createHttpHandler } from '../server/http';
 import * as roomCodes from '../server/room-code';
 
@@ -21,7 +21,7 @@ function deps(store = new FileStore(null)): AuthDeps {
   return {
     store,
     now: () => now,
-    auth: readAuthConfig({ SESSION_SECRET: 'a'.repeat(48), ALLOW_GUEST: 'true' }),
+    auth: readAuthConfig({ SESSION_SECRET: 'a'.repeat(48) }),
   };
 }
 async function guest(dependencies: AuthDeps, id: number): Promise<Session> {
@@ -913,49 +913,5 @@ describe('HTTP boundaries', () => {
     });
     expect(bad.statusCode).toBe(401);
     expect(JSON.parse(bad.body)).toMatchObject({ ok: false, error: { code: 'UNAUTHORIZED' } });
-  });
-});
-
-describe('CloudBase adapter contracts', () => {
-  function fakeDatabase(readResult: unknown, writeResult: unknown = {}) {
-    const db = {
-      collection: () => ({
-        doc: () => ({
-          get: async () => readResult,
-          set: async () => writeResult,
-          delete: async () => writeResult,
-        }),
-      }),
-      runTransaction: async <T>(work: (transaction: DatabaseLike) => Promise<T>) =>
-        work(db as unknown as DatabaseLike),
-    };
-    return new CloudBaseStore(db as unknown as DatabaseLike);
-  }
-  it('accepts SDK array reads outside transactions and object/null reads inside', async () => {
-    for (const data of [[{ value: { version: 7 } }], { value: { version: 7 } }]) {
-      const store = fakeDatabase({ data });
-      expect(await store.get('rooms', '123456')).toEqual({ version: 7 });
-      expect(await store.transaction((transaction) => transaction.get('rooms', '123456'))).toEqual({
-        version: 7,
-      });
-    }
-    for (const data of [[], null])
-      expect(await fakeDatabase({ data }).get('rooms', '123456')).toBeNull();
-  });
-  it('treats SDK returned error codes as failures and preserves retryable conflict codes', async () => {
-    const error = { code: 'DATABASE_TRANSACTION_CONFLICT', message: 'private database diagnostic' };
-    await expect(fakeDatabase(error).get('rooms', '123456')).rejects.toMatchObject({
-      code: error.code,
-      message: 'Database operation failed',
-    });
-    const store = fakeDatabase({ data: [] }, error);
-    await expect(
-      store.transaction((transaction) =>
-        transaction.set('rooms', '123456', { value: 'secret' }, now),
-      ),
-    ).rejects.toMatchObject({ code: error.code });
-    await expect(
-      store.transaction((transaction) => transaction.delete('rooms', '123456')),
-    ).rejects.toMatchObject({ code: error.code });
   });
 });

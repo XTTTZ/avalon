@@ -25,8 +25,7 @@ if (!env.SESSION_SECRET) {
     }
   }
 }
-// This runner is explicitly development-only. The CloudBase entry never sets defaults.
-env.ALLOW_GUEST ??= 'true';
+// This runner is explicitly development-only. Production secrets are supplied to the Worker.
 const store = new FileStore(filename);
 const handler = createHttpHandler(
   { store, auth: readAuthConfig(env) },

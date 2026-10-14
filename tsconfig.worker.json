@@ -5,5 +5,5 @@
     "types": ["node", "@cloudflare/workers-types"]
   },
   "include": ["worker", "worker-configuration.d.ts", "server", "shared"],
-  "exclude": ["server/local.ts", "server/cloud.ts", "server/postgres-store.ts"]
+  "exclude": ["server/local.ts"]
 }

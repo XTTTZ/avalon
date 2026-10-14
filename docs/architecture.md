@@ -62,7 +62,7 @@ API 的 `userId` 从服务端签名会话提取，玩家公开 playerId 为独�
 
 ## 登录与恢复
 
-开发或无公众号部署的 guest 由浏览器生成 256 位 deviceSecret，服务端以稳定密钥派生身份；只使用微信授权的环境关闭 guest。微信授权使用精确 HTTPS 回调白名单、随机一次性 state、浏览器 verifier；Worker 交换 code，OpenID 与 AppSecret 不发到客户端。会话有效 180 天，每次应用打开验证并刷新；服务器记录最近房间。本地只持久保存会话、deviceSecret、房间位置和 OAuth 临时校验数据，不缓存角色、任务选择或房间秘密。
+生产使用 guest 身份。浏览器生成 256 位 deviceSecret，服务端使用稳定的 `IDENTITY_SECRET` 派生身份；会话由独立的 `SESSION_SECRET` 签名。会话有效 180 天，每次应用打开验证并刷新，服务器记录最近房间。本地只持久保存会话、deviceSecret 和房间位置，不缓存角色、任务选择或房间秘密。
 
 显式「刷新」读取完整的本人房间投影及本人笔记，保留页面/草稿，重复点击合并，失败可重试，不重复提交命令。活动页面先通过短时 ticket 连接房间 Durable Object；WebSocket 只通知 `{roomInstanceId, gameId, version}`，收到后再用 HTTP 拉取本人投影。订阅建立后立即复核版本以补首次读取和握手之间的窗口；重复、乱序和漏通知都由版本比较处理。后台停止连接和轮询，恢复前台/在线立即读状态。WS 失败使用有上限的退避和低频 polling，正常连接也保留稀疏 HTTP 核对。网络丢失导致结果不确定时，用户可重试同一 requestId；服务器始终防止重复投票与跨阶段重放。
 
@@ -74,4 +74,4 @@ Cloudflare Worker 同时提供 Static Assets、HTTP API、`/api/health` 健康�
 
 ## 部署后仍须验收
 
-自动化覆盖本地同源 API、纯状态机、Neon adapter、Worker runtime、WebSocket 恢复和浏览器流程。真实 Neon 事务、DO 休眠唤醒、Cloudflare 自定义域名、公众号权限和微信 WebView 生命周期仍须在目标环境验证。生产验收还需记录 Worker/DO 请求与 CPU、Neon compute/存储/出站，确认朋友局规模落在免费额度预算内。
+自动化覆盖本地同源 API、纯状态机、Neon adapter、Worker runtime、WebSocket 恢复和浏览器流程。真实 Neon 事务、DO 休眠唤醒、Cloudflare 自定义域名和不同移动网络仍须在目标环境验证。生产验收还需记录 Worker/DO 请求与 CPU、Neon compute、存储和出站，确认朋友局规模落在免费额度预算内。

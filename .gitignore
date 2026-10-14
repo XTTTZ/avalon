@@ -7,11 +7,8 @@ dist/
 .env.production.local
 !.env.example
 .dev.vars
-cloudfunctions/avalon/index.js
-cloudfunctions/avalon/node_modules/
 playwright-report/
 test-results/
 .DS_Store
-.cloudbase/
 *.tsbuildinfo
 *.cpuprofile

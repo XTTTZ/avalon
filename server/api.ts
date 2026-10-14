@@ -14,10 +14,8 @@ import { ROLE_META, validateConfig } from '../shared/rules.js';
 import { applyCommand, createRoom, joinRoom, projectRoom, type RoomState } from './engine.js';
 import {
   ensureUser,
-  finishWechat,
   guestLogin,
   sessionFor,
-  startWechat,
   verifyToken,
   type AuthDeps,
   type Receipt,
@@ -76,8 +74,6 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
   safeTree(request);
   const fields: Record<string, string[]> = {
     'auth.guest': ['deviceSecret'],
-    'auth.wechat.start': ['redirectUri', 'verifier'],
-    'auth.wechat.finish': ['code', 'state', 'verifier'],
     session: [],
     create: ['name', 'config', 'requestId'],
     join: ['code', 'name', 'requestId'],
@@ -311,8 +307,7 @@ export type ApiResult =
   | { left: true }
   | NotesResult
   | RealtimeTicket
-  | Awaited<ReturnType<typeof guestLogin>>
-  | Awaited<ReturnType<typeof startWechat>>;
+  | Awaited<ReturnType<typeof guestLogin>>;
 export async function handleApi(
   input: unknown,
   token: string | undefined,
@@ -322,10 +317,6 @@ export async function handleApi(
   const request = input;
   const now = (deps.now ?? Date.now)();
   if (request.action === 'auth.guest') return guestLogin(request.deviceSecret, deps);
-  if (request.action === 'auth.wechat.start')
-    return startWechat(request.redirectUri, request.verifier, deps);
-  if (request.action === 'auth.wechat.finish')
-    return finishWechat(request.code, request.state, request.verifier, deps);
   const claims = verifyToken(token, deps.auth, now);
   const userId = claims.userId;
 

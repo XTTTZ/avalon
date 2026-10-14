@@ -145,12 +145,10 @@ export interface Session {
   userId: string;
   lastRoom: string | null;
   expiresAt: number;
-  provider: 'guest' | 'wechat';
+  provider: 'guest';
 }
 export type ApiRequest =
   | { action: 'auth.guest'; deviceSecret: string }
-  | { action: 'auth.wechat.start'; redirectUri: string; verifier: string }
-  | { action: 'auth.wechat.finish'; code: string; state: string; verifier: string }
   | { action: 'session' }
   | { action: 'create'; name: string; config: GameConfig; requestId: string }
   | { action: 'join'; code: string; name: string; requestId: string }

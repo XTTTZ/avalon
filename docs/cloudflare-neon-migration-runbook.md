@@ -1,48 +1,124 @@
-# Cloudflare + Neon 迁移执行记录
+# Cloudflare + Neon 全新部署操作单
 
-日期：2026-10-13。源代码基线：`ee7ae5e8a33c4d02319808f1cfb931a7a2e91c26`。
+日期：2026-10-14。
 
-这份操作单记录实际资源和验收结果。密钥、数据库连接串、旧库导出内容和玩家数据不得写入本文或 Git。
+本次上线从空数据库开始，只使用 guest 身份。不会导入任何旧房间、玩家、会话或私人笔记。密钥和数据库连接串不得写入本文或 Git。
 
-## 资源
+## 目标资源
 
-| 应用   | GitHub               | Cloudflare Worker | Neon 项目                  | Neon production branch  | 正式域名               |
-| ------ | -------------------- | ----------------- | -------------------------- | ----------------------- | ---------------------- |
-| Avalon | `XTTTZ/avalon`       | `avalon`          | `lucky-butterfly-60587453` | `br-aged-tree-b3seaf66` | `www.avalonxty.site`   |
-| Poker  | `XTTTZ/avalon-poker` | `avalon-poker`    | `proud-snow-35074894`      | `br-odd-surf-b3lzyfgb`  | `poker.avalonxty.site` |
+| 项目                   | 值                                             |
+| ---------------------- | ---------------------------------------------- |
+| GitHub                 | `XTTTZ/avalon`                                 |
+| Cloudflare account     | `0ca76232217115d0b9dd45572c790fa2`             |
+| Worker                 | `avalon`                                       |
+| workers.dev            | `https://avalon.avalon-roundtable.workers.dev` |
+| Neon 项目              | `lucky-butterfly-60587453`                     |
+| Neon production branch | `br-aged-tree-b3seaf66`                        |
+| Neon region            | `aws-ap-southeast-1`                           |
+| 数据库                 | `avalon_prod`                                  |
+| 运行角色               | `avalon_runtime`                               |
+| 正式域名               | `https://www.avalonxty.site`                   |
 
-两个 Neon 项目均为 PostgreSQL 17、AWS 新加坡 `aws-ap-southeast-1`，当前账号免费规格将计算固定为 0.25 CU；平台不允许本账号自行修改休眠间隔。
+Cloudflare zone `avalonxty.site` 的 ID 为 `2de383921e394cee36e271ec503667ab`。zone 激活需要注册商使用 Cloudflare 分配的两个 nameserver：
 
-Cloudflare zone 为 `2de383921e394cee36e271ec503667ab`，当前状态 `pending`；待注册商切换到 `augustus.ns.cloudflare.com` 和 `katja.ns.cloudflare.com` 后才会激活。切 NS 前已在待激活 zone 中临时保留根域名和 `www` 到 `xtttz.github.io` 的 DNS-only CNAME，避免 DNS 托管切换本身提前改变应用源站。
+- `augustus.ns.cloudflare.com`
+- `katja.ns.cloudflare.com`
 
-## 回滚材料
+## 1. 本地验证
 
-- 源仓库本地 Git bundle：`/tmp/avalon-pre-cloudflare-neon-20261013.bundle`，仅用于本机临时恢复，不属于长期备份。
-- Poker 通过 `git subtree split --prefix=apps/poker` 提取，提取提交为 `82a62b7ee100bfe44894b447c007cd218c05de43`。
-- CloudBase、GitHub Pages 与原 DNS 在新站验收前保持可回滚；新端开始接收生产写入后，回滚代码仍连接同一 Neon 数据库，禁止直接切回落后的旧库。
+```sh
+npm ci
+npm run format:check
+npm run worker:types:check
+npm test
+npm run build
+npm run worker:dry-run
+npx playwright install chromium
+npm run test:e2e
+```
 
-## 执行检查
+所有检查通过后再配置自动部署。
 
-- [x] 记录本地与 GitHub 源 SHA，创建 Git bundle。
-- [x] 在独立临时克隆验证旧版 Avalon：129 项单元测试和生产构建通过。
-- [x] 在独立临时克隆验证旧版 Poker：45 项单元测试和生产构建通过。
-- [x] 保留 Poker Git 历史并建立同级独立仓库。
-- [x] 创建两个隔离的 Neon 新加坡项目。
-- [x] 创建待激活的 Cloudflare zone，并预置现有 GitHub Pages 回源记录。
-- [x] 两仓库格式、类型、单元测试、PostgreSQL 17 权限/迁移、生产构建和 Worker dry-run 通过；Avalon 16 项手机 E2E 通过。
-- [ ] 在隔离 Neon 分支预演 schema 与数据导入并核对哈希、revision 和回执。
-- [x] 两个预览 Worker 已部署到 `workers.dev`；实测访客登录、建房、加入、WebSocket 版本通知、鉴权/CORS/no-store 和解散清理通过。
-- [ ] 冻结 CloudBase 写入，执行最终导出和导入；保留原身份派生与会话密钥。
-- [ ] 将 DNS 托管迁移到 Cloudflare，再分别绑定两个自定义域名。
-- [ ] 在微信、国内移动网络和海外网络完成真实访问验收。
-- [ ] 推送两个 GitHub `main`，验证 CI；最后才开启 `DEPLOY_ENABLED`。
-- [ ] 连续观察至少 7 天后再移除旧 CloudBase/Pages 发布依赖。
+## 2. Neon 初始化
 
-预览地址：
+1. 在 Neon 项目中确认数据库 `avalon_prod` 存在。
+2. 创建登录角色 `avalon_runtime`，使用独立强密码，并保持 `NOINHERIT NOCREATEDB NOCREATEROLE NOBYPASSRLS`。
+3. 获取两条连接串：
+   - owner 的 direct、non-pooler 连接串，用作 `NEON_DIRECT_DATABASE_URL`；
+   - `avalon_runtime` 的 pooled 连接串，用作 `NEON_DATABASE_URL`。
+4. 使用 owner direct 连接执行 `migrations/0001_avalon.sql`。migration 会撤销公开表权限，只授予 `avalon_runtime` 三个应用函数的执行权限。
+5. 验证 `avalon_runtime` 能调用 `avalon_get`、`avalon_commit`、`avalon_cleanup`，且不能直接查询 `avalon_documents`。
 
-- Avalon：`https://avalon.avalon-roundtable.workers.dev`
-- Poker：`https://avalon-poker.avalon-roundtable.workers.dev`
+GitHub 部署每次都会幂等执行 `migrations/*.sql`，运行时 Worker 永远不持有 owner 连接串。
 
-两个 Neon runtime 登录角色分别为 `avalon_runtime` 和 `poker_runtime`，均为 `NOINHERIT`，只能执行应用函数，不能直接读取权威文档表。正式切流前仍需迁移旧数据与稳定身份密钥；当前预览使用的是隔离的临时身份密钥。
+## 3. GitHub Actions 配置
 
-详细设计、免费额度预算和数据迁移约束见 [`repository-split-cloudflare-neon-plan.md`](repository-split-cloudflare-neon-plan.md)。
+Repository Variables：
+
+| 名称                    | DNS 切换前的值                     |
+| ----------------------- | ---------------------------------- |
+| `CLOUDFLARE_ACCOUNT_ID` | `0ca76232217115d0b9dd45572c790fa2` |
+| `DEPLOY_ENABLED`        | `true`                             |
+| `CUSTOM_DOMAIN_ENABLED` | `false`                            |
+
+Repository Secrets：
+
+- `CLOUDFLARE_API_TOKEN`
+- `NEON_DIRECT_DATABASE_URL`
+- `NEON_DATABASE_URL`
+- `SESSION_SECRET`
+- `IDENTITY_SECRET`
+
+`SESSION_SECRET` 和 `IDENTITY_SECRET` 使用两个不同的、至少 32 字节的随机值，生成后保持稳定。项目不使用 R2，R2 Access Key 与 Secret Access Key 不得加入仓库。当前 workflow 不调用 Neon 管理 API，因此也不需要保存 Neon API Key。
+
+`production` Environment 可用于保护部署和集中管理环境级 secrets；当前 workflow 同样支持仓库级 Variables 与 Secrets。
+
+## 4. DNS 切换前发布
+
+`CUSTOM_DOMAIN_ENABLED=false` 时，Wrangler 不创建自定义域名，只发布到：
+
+`https://avalon.avalon-roundtable.workers.dev`
+
+推送 `main` 或手动运行 `Deploy Avalon`。workflow 将：
+
+1. 复用 CI 完成格式、类型、单元测试、PostgreSQL 17 schema、生产构建和手机 E2E；
+2. 使用 direct URL 执行 migration；
+3. 使用受限 runtime URL、guest 身份和稳定密钥部署 Worker；
+4. 检查 workers.dev 首页和 `/api/health`。
+
+随后用两台浏览器完成 guest 登录、建房、加入、WebSocket 更新、刷新恢复、投票、结算与解散测试。
+
+## 5. 启用正式域名
+
+1. 在域名注册商处把 nameserver 改为 Cloudflare 分配值。
+2. 等 Cloudflare zone 变为 active。
+3. 删除会与 Worker 自定义域名冲突的旧 `www` DNS 记录。
+4. 将 GitHub Variable `CUSTOM_DOMAIN_ENABLED` 改为 `true`。
+5. 手动运行 `Deploy Avalon`。
+
+workflow 会追加 `wrangler deploy --domain www.avalonxty.site`，并同时检查 workers.dev 与以下正式地址：
+
+- `https://www.avalonxty.site/`
+- `https://www.avalonxty.site/api/health`
+
+确认 HTTPS、API、WebSocket、邀请链接和手机浏览器均正常后完成切换。
+
+## 6. 回滚与运行观察
+
+- 应用回滚使用 Cloudflare Worker 版本回滚或重新部署已验证的 Git commit。
+- schema migration 只允许向前兼容；需要破坏性变更时先建 Neon 分支演练和备份。
+- 回滚应用时继续连接同一个 Neon 数据库，避免数据分叉。
+- 观察 Worker 请求量、错误、CPU、Durable Object 请求与存储，以及 Neon compute、存储和出站。
+- 保持额度和费用告警。朋友局流量很小，但免费额度不是可用性承诺。
+
+## 当前检查点
+
+- [x] Avalon 与 Poker 已拆为独立仓库。
+- [x] Worker、Durable Object、Static Assets 和 Neon adapter 已实现。
+- [x] Neon 项目、production branch、数据库和受限运行角色已建立。
+- [x] workers.dev 预览完成 HTTP、WebSocket、鉴权、CORS 和隐私边界验证。
+- [x] 自动部署支持 DNS 切换前只发布 workers.dev。
+- [ ] 将完整 Variables 与 Secrets 写入 GitHub。
+- [ ] 运行一次新的 `main` 自动部署并验证 workers.dev。
+- [ ] 用户切换 nameserver，等待 Cloudflare zone active。
+- [ ] 启用 custom domain 并完成正式域名验收。

@@ -15,13 +15,20 @@ END
 $$;
 
 CREATE TABLE IF NOT EXISTS public.avalon_documents (
-  collection text NOT NULL CHECK (collection IN ('rooms', 'users', 'notes', 'oauth')),
+  collection text NOT NULL,
   id text NOT NULL CHECK (length(id) BETWEEN 1 AND 256),
   value jsonb NOT NULL,
   expires_at bigint NOT NULL,
   revision uuid NOT NULL DEFAULT gen_random_uuid(),
   PRIMARY KEY (collection, id)
 );
+
+DELETE FROM public.avalon_documents WHERE collection NOT IN ('rooms', 'users', 'notes');
+ALTER TABLE public.avalon_documents
+  DROP CONSTRAINT IF EXISTS avalon_documents_collection_check;
+ALTER TABLE public.avalon_documents
+  ADD CONSTRAINT avalon_documents_collection_check
+  CHECK (collection IN ('rooms', 'users', 'notes'));
 
 CREATE INDEX IF NOT EXISTS avalon_documents_expiry
   ON public.avalon_documents (expires_at);
@@ -36,7 +43,7 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  IF p_collection NOT IN ('rooms', 'users', 'notes', 'oauth')
+  IF p_collection NOT IN ('rooms', 'users', 'notes')
      OR length(p_id) NOT BETWEEN 1 AND 256 THEN
     RAISE EXCEPTION 'Invalid document key';
   END IF;
@@ -69,7 +76,7 @@ BEGIN
 
   FOR r IN SELECT value FROM jsonb_array_elements(p_reads || p_writes)
   LOOP
-    IF r->>'collection' NOT IN ('rooms', 'users', 'notes', 'oauth')
+    IF r->>'collection' NOT IN ('rooms', 'users', 'notes')
        OR length(r->>'id') NOT BETWEEN 1 AND 256 THEN
       RAISE EXCEPTION 'Invalid document key';
     END IF;

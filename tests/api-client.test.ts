@@ -88,7 +88,6 @@ async function mount() {
 beforeEach(() => {
   roomFixtures.clear();
   vi.resetModules();
-  vi.stubEnv('VITE_AUTH_MODE', 'guest');
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   localStorage.clear();
   history.replaceState(null, '', '/');
@@ -471,36 +470,6 @@ describe('browser session recovery and mutation safety', () => {
     expect(contents).not.toContain('merlin');
     expect(contents).not.toContain('绝不能缓存');
     expect(JSON.parse(localStorage.getItem(KEY + 'room')!)).toBe('123456');
-  });
-  it('keeps the accepted session usable when OAuth returns but session persistence fails', async () => {
-    vi.stubEnv('VITE_AUTH_MODE', 'wechat');
-    localStorage.setItem(
-      KEY + 'oauth',
-      JSON.stringify({ state: 'safe-state', verifier: 'secret-verifier', room: '123456' }),
-    );
-    history.replaceState(null, '', '/?code=wechat-code&state=safe-state');
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new DOMException('full');
-    });
-    handle((request) =>
-      request.action === 'auth.wechat.finish'
-        ? response({ ...session, provider: 'wechat' })
-        : undefined,
-    );
-    await mount();
-    expect(current.session?.provider).toBe('wechat');
-    expect(current.view?.room.code).toBe('123456');
-    expect(location.search).toBe('?room=123456');
-    expect(localStorage.getItem(KEY + 'oauth')).toBeNull();
-    const auth = requests().filter((r) => r.action === 'auth.wechat.finish');
-    expect(auth).toEqual([
-      {
-        action: 'auth.wechat.finish',
-        code: 'wechat-code',
-        state: 'safe-state',
-        verifier: 'secret-verifier',
-      },
-    ]);
   });
 });
 

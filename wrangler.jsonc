@@ -7,12 +7,6 @@
   "upload_source_maps": true,
   "workers_dev": true,
   "preview_urls": true,
-  "routes": [
-    {
-      "pattern": "www.avalonxty.site",
-      "custom_domain": true,
-    },
-  ],
   "placement": { "mode": "smart" },
   "assets": {
     "directory": "./dist",
@@ -26,9 +20,7 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomHub"] }],
   "triggers": { "crons": ["7 18 * * *"] },
   "vars": {
-    "ALLOW_GUEST": "true",
-    "ALLOWED_ORIGINS": "https://www.avalonxty.site",
-    "WECHAT_REDIRECT_URIS": "https://www.avalonxty.site/",
+    "ALLOWED_ORIGINS": "https://avalon.avalon-roundtable.workers.dev,https://www.avalonxty.site",
   },
   "observability": {
     "enabled": true,
