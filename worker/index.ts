@@ -13,6 +13,8 @@ interface WorkerEnv extends Env {
 }
 
 interface SocketAttachment {
+  connectionId?: string;
+  connectedAt?: number;
   userId: string;
   roomInstanceId: string;
   gameId: string;
@@ -23,6 +25,16 @@ const CLEANUP_BATCH_SIZE = 400;
 const MAX_CLEANUP_BATCHES = 10;
 const MAX_ROOM_SOCKETS = 64;
 const MAX_USER_SOCKETS = 3;
+
+// Neon uses stateless HTTP queries. Reuse only its bounded, completed JSON
+// snapshots; every read still validates the database revision. No request I/O
+// or promises are shared between Worker requests.
+let cachedStore: { databaseUrl: string; store: NeonStore } | undefined;
+function storeFor(env: WorkerEnv) {
+  if (!cachedStore || cachedStore.databaseUrl !== env.DATABASE_URL)
+    cachedStore = { databaseUrl: env.DATABASE_URL, store: new NeonStore(env.DATABASE_URL) };
+  return cachedStore.store;
+}
 
 const JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
@@ -76,6 +88,9 @@ function decodeInternalClaims(value: string | null): VerifiedRealtimeTicket | nu
       typeof claims.userId !== 'string' ||
       typeof claims.roomInstanceId !== 'string' ||
       typeof claims.gameId !== 'string' ||
+      (claims.connectionId !== undefined &&
+        (typeof claims.connectionId !== 'string' ||
+          !/^[A-Za-z0-9_-]{16,80}$/.test(claims.connectionId))) ||
       !Number.isSafeInteger(claims.version) ||
       !Number.isSafeInteger(claims.expiresAt) ||
       !Number.isSafeInteger(claims.sessionExpiresAt)
@@ -92,6 +107,7 @@ export class RoomHub extends DurableObject<WorkerEnv> {
 
   constructor(ctx: DurableObjectState, env: WorkerEnv) {
     super(ctx, env);
+    this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
     this.ctx.blockConcurrencyWhile(async () => {
       const stored = await this.ctx.storage.get<RealtimeNotice>('notice');
       if (validNotice(stored)) this.current = stored;
@@ -111,15 +127,29 @@ export class RoomHub extends DurableObject<WorkerEnv> {
     const claims = decodeInternalClaims(request.headers.get('X-Avalon-Realtime'));
     if (!claims || claims.expiresAt <= Date.now())
       return new Response('Unauthorized', { status: 401 });
-    const sockets = this.ctx.getWebSockets();
-    if (sockets.length >= MAX_ROOM_SOCKETS)
-      return new Response('Room connection limit', { status: 429 });
+    const sockets = this.ctx
+      .getWebSockets()
+      .filter((socket) => socket.readyState === WebSocket.OPEN);
     const userSockets = sockets.filter(
       (socket) =>
         (socket.deserializeAttachment() as SocketAttachment | null)?.userId === claims.userId,
     );
-    if (userSockets.length >= MAX_USER_SOCKETS)
-      return new Response('Player connection limit', { status: 429 });
+    const replaced = new Set<WebSocket>();
+    for (const socket of userSockets) {
+      const attachment = socket.deserializeAttachment() as SocketAttachment;
+      if (claims.connectionId && attachment.connectionId === claims.connectionId)
+        replaced.add(socket);
+    }
+    const remaining = userSockets
+      .filter((socket) => !replaced.has(socket))
+      .sort(
+        (a, b) =>
+          ((a.deserializeAttachment() as SocketAttachment)?.connectedAt ?? 0) -
+          ((b.deserializeAttachment() as SocketAttachment)?.connectedAt ?? 0),
+      );
+    while (remaining.length >= MAX_USER_SOCKETS) replaced.add(remaining.shift()!);
+    if (sockets.length - replaced.size >= MAX_ROOM_SOCKETS)
+      return new Response('Room connection limit', { status: 429 });
 
     const ticketNotice: RealtimeNotice = {
       type: 'room-version',
@@ -129,6 +159,14 @@ export class RoomHub extends DurableObject<WorkerEnv> {
     };
     if (this.current && this.current.roomInstanceId !== ticketNotice.roomInstanceId)
       return new Response('Conflict', { status: 409 });
+    for (const socket of replaced) {
+      try {
+        socket.send(JSON.stringify({ type: 'replaced' }));
+      } catch {
+        /* already disconnected */
+      }
+      socket.close(4001, 'Connection replaced');
+    }
     if (isNewer(this.current, ticketNotice)) {
       this.current = ticketNotice;
       await this.ctx.storage.put('notice', ticketNotice);
@@ -138,6 +176,13 @@ export class RoomHub extends DurableObject<WorkerEnv> {
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({
+      connectionId: claims.connectionId,
+      connectedAt: Math.max(
+        Date.now(),
+        ...sockets.map(
+          (socket) => ((socket.deserializeAttachment() as SocketAttachment)?.connectedAt ?? 0) + 1,
+        ),
+      ),
       userId: claims.userId,
       roomInstanceId: claims.roomInstanceId,
       gameId: claims.gameId,
@@ -249,7 +294,7 @@ function websocketProtocols(request: Request) {
 
 function createDeps(env: WorkerEnv, context: ExecutionContext): AuthDeps {
   return {
-    store: new NeonStore(env.DATABASE_URL),
+    store: storeFor(env),
     auth: readAuthConfig({
       SESSION_SECRET: env.SESSION_SECRET,
       IDENTITY_SECRET: env.IDENTITY_SECRET,
@@ -356,7 +401,7 @@ export default {
     return env.ASSETS.fetch(request);
   },
   async scheduled(_controller: ScheduledController, env: WorkerEnv) {
-    const store = new NeonStore(env.DATABASE_URL);
+    const store = storeFor(env);
     const now = Date.now();
     for (let batches = 0; batches < MAX_CLEANUP_BATCHES; batches++) {
       const deleted = await store.cleanup(now, CLEANUP_BATCH_SIZE);
