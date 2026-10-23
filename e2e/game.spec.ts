@@ -566,6 +566,88 @@ test('offline reconnect keeps the same seat and resumes current public state', a
   expect(size.scroll).toBeLessThanOrEqual(size.width);
 });
 
+test('unlock retries quietly before showing a persistent outage once', async ({
+  page,
+  context,
+  request,
+}) => {
+  const game = await prepare(request);
+  await enter(page, game.sessions[0], game.code);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('pagehide'));
+  });
+  await context.setOffline(true);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('pageshow'));
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.waitForTimeout(5000);
+  await expect(page.locator('.connection-banner')).toHaveCount(0);
+  await expect(page.locator('.error-banner')).toHaveCount(0);
+  await expect(page.locator('.connection-banner')).toBeVisible({ timeout: 7000 });
+  await expect(page.locator('.error-banner')).toHaveCount(0);
+  await context.setOffline(false);
+  await expect(page.locator('.connection-banner')).toHaveCount(0);
+  expect((await game.get(0)).self.playerId).toBe(game.playerIds[0]);
+});
+
+test('compact phone table keeps seven players and voting controls in view', async ({
+  page,
+  request,
+}) => {
+  const game = await prepare(request, 7);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await enter(page, game.sessions[0], game.code);
+  const rulesToggle = page.getByRole('button', { name: '本局规则', exact: true });
+  await expect(rulesToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.mission-board')).toHaveCount(0);
+  await expect(page.locator('#room-rules-detail')).toBeHidden();
+  await rulesToggle.click();
+  await expect(page.locator('#room-rules-detail .quest-track')).toBeVisible();
+  await rulesToggle.click();
+  const allSeatsAboveNav = async () => {
+    const nav = (await page.locator('.bottom-nav').boundingBox())!;
+    for (const seat of await page.locator('.player-seat').all()) {
+      const box = (await seat.boundingBox())!;
+      expect(box.y + box.height).toBeLessThanOrEqual(nav.y);
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+  };
+  await allSeatsAboveNav();
+  await page.getByRole('button', { name: '开始游戏', exact: false }).click();
+  for (let i = 0; i < 7; i++) await game.command(i, { type: 'ready' });
+  const current = await game.get(0);
+  const leaderIndex = game.playerIds.indexOf(current.room.leaderId!);
+  await game.command(leaderIndex, { type: 'propose', team: game.playerIds.slice(0, 2) });
+  await page.getByRole('button', { name: '刷新游戏状态' }).click();
+  await expect(page.getByRole('button', { name: '同意', exact: true })).toBeVisible();
+  await expect(page.locator('.quest-threshold')).toContainText('≥2');
+  await allSeatsAboveNav();
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    expect(
+      await page
+        .locator('.player-name')
+        .first()
+        .evaluate((el) => parseFloat(getComputedStyle(el).fontSize)),
+    ).toBeGreaterThanOrEqual(16);
+    for (const label of ['同意', '反对']) {
+      const box = (await page.getByRole('button', { name: label, exact: true }).boundingBox())!;
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(box.y + box.height).toBeLessThan((await page.locator('.bottom-nav').boundingBox())!.y);
+    }
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.screenshot({ path: 'test-results/mobile-compact-voting.png', fullPage: true });
+});
+
 test('phone creates a standard room, edits extensions, and exposes a working invitation QR', async ({
   page,
   browser,
@@ -576,6 +658,7 @@ test('phone creates a standard room, edits extensions, and exposes a working inv
   await page.getByRole('button', { name: '创建房间', exact: true }).click();
   await expect(page.getByRole('heading', { name: '游戏大厅' })).toBeVisible();
   await expect(page.getByRole('button', { name: /开始游戏/ })).toBeDisabled();
+  await page.getByRole('button', { name: '本局规则', exact: true }).click();
   const defaultEvilRoles = page.locator('.faction-group.evil');
   await expect(defaultEvilRoles).toContainText('奥伯伦');
   await expect(defaultEvilRoles).not.toContainText('爪牙');

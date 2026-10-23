@@ -153,6 +153,7 @@ async function authenticate(signal?: AbortSignal): Promise<Session> {
 }
 
 type Connection = 'connecting' | 'online' | 'offline' | 'reconnecting';
+const RESUME_NOTICE_DELAY = 10_000;
 type PendingRequest = Extract<ApiRequest, { action: 'create' | 'join' | 'command' }>;
 function sameMembership(previous: RoomView | null, next: RoomView): boolean {
   return (
@@ -170,6 +171,10 @@ export function useGame() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Keep transport notices separate from rejected or unconfirmed player actions.
+  // Foreground recovery may hide the former, but must never hide the latter.
+  const [networkError, setNetworkError] = useState<string | null>(null);
+  const [quietRecovery, setQuietRecovery] = useState(false);
   const [connection, setConnection] = useState<Connection>('connecting');
   const [pending, setPending] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -194,9 +199,31 @@ export function useGame() {
   const unchanged = useRef(0);
   const notesRevisionRef = useRef(0);
   const alive = useRef(true);
+  const recoveryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A recycled room code or a new seat is a new membership. Invalidate pending
   // responses and private notes even when the visible room code stays the same.
   const scope = useRef(0);
+
+  const markConnected = useCallback(() => {
+    failures.current = 0;
+    setConnection('online');
+    setNetworkError(null);
+    setQuietRecovery(false);
+    if (recoveryTimer.current !== null) clearTimeout(recoveryTimer.current);
+    recoveryTimer.current = null;
+  }, []);
+
+  const beginQuietRecovery = useCallback(() => {
+    if (recoveryTimer.current !== null) clearTimeout(recoveryTimer.current);
+    failures.current = 0;
+    setConnection('connecting');
+    setNetworkError(null);
+    setQuietRecovery(true);
+    recoveryTimer.current = setTimeout(() => {
+      recoveryTimer.current = null;
+      if (alive.current) setQuietRecovery(false);
+    }, RESUME_NOTICE_DELAY);
+  }, []);
 
   const rememberLastRoom = useCallback((code: string | null) => {
     const current = sessionRef.current;
@@ -233,14 +260,13 @@ export function useGame() {
         url.searchParams.set('room', next.room.code);
         history.replaceState(null, '', url);
       }
-      failures.current = 0;
-      setConnection('online');
+      markConnected();
       if (storageWarning) {
         setError(storageWarning);
         storageWarning = null;
       }
     },
-    [rememberLastRoom],
+    [rememberLastRoom, markConnected],
   );
   const loadNotes = useCallback(async (code: string, token: string) => {
     const requestScope = scope.current;
@@ -280,11 +306,14 @@ export function useGame() {
   }, []);
   const markError = useCallback((err: unknown) => {
     const message = err instanceof Error ? err.message : '发生了意外错误，请重试。';
-    setError(message);
     if (err instanceof ClientError && err.code === 'NETWORK') {
+      setNetworkError(message);
       failures.current += 1;
       setConnection(navigator.onLine ? 'reconnecting' : 'offline');
-    }
+      // Event-driven reads can fail while the next healthy-WebSocket poll is
+      // still a minute away. Start a bounded retry promptly, including in grace.
+      reschedulePolling.current();
+    } else setError(message);
   }, []);
   const initialize = useCallback(
     async (forceRestore = false) => {
@@ -300,7 +329,6 @@ export function useGame() {
         if (!alive.current || scope.current !== requestScope) return;
         sessionRef.current = current;
         setSession(current);
-        setConnection('online');
         if (storageWarning) {
           setError(storageWarning);
           storageWarning = null;
@@ -335,7 +363,10 @@ export function useGame() {
             } else throw err;
           }
         }
-        if (!controller.signal.aborted) restorePending.current = false;
+        if (!controller.signal.aborted) {
+          restorePending.current = false;
+          markConnected();
+        }
       } catch (err) {
         if (!controller.signal.aborted && alive.current && scope.current === requestScope)
           markError(err);
@@ -346,7 +377,7 @@ export function useGame() {
         }
       }
     },
-    [acceptView, loadNotes, leaveView, markError],
+    [acceptView, loadNotes, leaveView, markError, markConnected],
   );
 
   const sync = useCallback((): Promise<void> => {
@@ -393,9 +424,7 @@ export function useGame() {
                 if (alive.current && sameMembership(viewRef.current, result)) markError(err);
               });
           }
-          failures.current = 0;
-          setConnection('online');
-          setError((old) => (old?.includes('连接') || old?.includes('离线') ? null : old));
+          markConnected();
         } catch (err) {
           if (flight.controller.signal.aborted) return;
           if (
@@ -423,7 +452,7 @@ export function useGame() {
       if (syncFlight.current === flight) syncFlight.current = null;
     });
     return flight.promise;
-  }, [acceptView, leaveView, markError, initialize, loadNotes]);
+  }, [acceptView, leaveView, markError, initialize, loadNotes, markConnected]);
 
   const cancelReads = useCallback(() => {
     syncFlight.current?.controller.abort();
@@ -463,8 +492,7 @@ export function useGame() {
       await loadNotes(result.room.code, current.token);
       if (alive.current && sameMembership(viewRef.current, result)) {
         unchanged.current = 0;
-        failures.current = 0;
-        setConnection('online');
+        markConnected();
       }
     } catch (err) {
       if (!alive.current || requestScope !== scope.current) return;
@@ -477,7 +505,7 @@ export function useGame() {
       refreshingRef.current = false;
       if (alive.current) setRefreshing(false);
     }
-  }, [acceptView, initialize, leaveView, loadNotes, markError, cancelReads]);
+  }, [acceptView, initialize, leaveView, loadNotes, markError, cancelReads, markConnected]);
   const restore = useCallback(async () => {
     await initialize(true);
   }, [initialize]);
@@ -605,8 +633,17 @@ export function useGame() {
     };
     reschedulePolling.current = schedule;
     schedule();
+    let wasHidden = document.hidden;
     const reconnect = () => {
       if (!document.hidden) {
+        // One grace period per real background/foreground cycle. Mobile
+        // browsers often emit visibilitychange, pageshow and focus together;
+        // those duplicate events must not postpone a genuine outage forever.
+        if (wasHidden) {
+          wasHidden = false;
+          beginQuietRecovery();
+          cancelReads();
+        }
         unchanged.current = 0;
         void refresh();
       }
@@ -620,8 +657,12 @@ export function useGame() {
       cancelReads();
       void refresh();
     });
+    const suspend = () => {
+      wasHidden = true;
+      cancelReads();
+    };
     const hidden = () => {
-      if (document.hidden) cancelReads();
+      if (document.hidden) suspend();
     };
     // OS offline can be inaccurate with VPNs: discard stale reads, then probe the origin.
     const offline = () => {
@@ -632,7 +673,7 @@ export function useGame() {
     window.addEventListener('offline', offline);
     window.addEventListener('pageshow', reconnect);
     window.addEventListener('focus', reconnect);
-    window.addEventListener('pagehide', cancelReads);
+    window.addEventListener('pagehide', suspend);
     document.addEventListener('visibilitychange', reconnect);
     document.addEventListener('visibilitychange', hidden);
     return () => {
@@ -642,17 +683,21 @@ export function useGame() {
       unsubscribeNetwork();
       // React StrictMode immediately remounts; only abandon reads on a real unmount.
       queueMicrotask(() => {
-        if (!alive.current) cancelReads();
+        if (!alive.current) {
+          cancelReads();
+          if (recoveryTimer.current !== null) clearTimeout(recoveryTimer.current);
+          recoveryTimer.current = null;
+        }
       });
       window.removeEventListener('online', reconnect);
       window.removeEventListener('offline', offline);
       window.removeEventListener('pageshow', reconnect);
       window.removeEventListener('focus', reconnect);
-      window.removeEventListener('pagehide', cancelReads);
+      window.removeEventListener('pagehide', suspend);
       document.removeEventListener('visibilitychange', reconnect);
       document.removeEventListener('visibilitychange', hidden);
     };
-  }, [initialize, refresh, sync, cancelReads]);
+  }, [initialize, refresh, sync, cancelReads, beginQuietRecovery]);
 
   const execute = useCallback(
     async (request: PendingRequest) => {
@@ -796,8 +841,9 @@ export function useGame() {
     notesRevision,
     loading,
     busy,
-    error,
-    connection,
+    error: error || (quietRecovery ? null : networkError),
+    errorIsNetwork: !error && Boolean(networkError),
+    connection: quietRecovery && connection !== 'online' ? ('connecting' as const) : connection,
     pending,
     create,
     join,
@@ -807,7 +853,10 @@ export function useGame() {
     refreshNow,
     refreshing,
     restore,
-    clearError: () => setError(null),
+    clearError: () => {
+      setError(null);
+      setNetworkError(null);
+    },
     leaveView,
     retryPending,
   };

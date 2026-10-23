@@ -187,7 +187,6 @@ function QuestTrack({ room }: { room: PublicRoom }) {
             >
               {result ? result.passed ? <Check size={22} /> : <X size={21} /> : quest.size}
             </span>
-            {result && <span className="quest-detail">{result.passed ? '成功' : '失败'}</span>}
             {quest.failsRequired > 1 && (
               <span className="quest-threshold">≥{quest.failsRequired} 失败票</span>
             )}
@@ -382,7 +381,7 @@ function PublicActions({
   const quest = room.config.quests[room.round - 1];
   if (room.phase === 'lobby')
     return (
-      <div className="action-panel">
+      <div className="action-panel lobby-action">
         <div className="action-icon">
           <Users size={24} />
         </div>
@@ -392,7 +391,7 @@ function PublicActions({
               ? '玩家已到齐'
               : `等待玩家（${room.players.length}/${room.config.playerCount}）`}
           </h3>
-          <p>{isHost ? '人齐后即可开始。' : '等待房主开始。'}</p>
+          {!isHost && <p>等待房主开始</p>}
         </div>
         {isHost && (
           <button
@@ -437,11 +436,7 @@ function PublicActions({
                 ? '请选择队员'
                 : `等待 ${name(room.leaderId)} 组队`}
           </h3>
-          <p>
-            {room.leaderId === self.playerId
-              ? `选择 ${quest?.size} 人，可包含自己。`
-              : `本轮需要 ${quest?.size} 人。`}
-          </p>
+          <p>{room.leaderId === self.playerId ? `选择 ${quest?.size} 人，可包含自己。` : null}</p>
         </div>
         {!room.leaderId && isHost && (
           <button className="button primary" onClick={onSort}>
@@ -463,10 +458,8 @@ function PublicActions({
     return (
       <div className="action-panel vote-action">
         <div className="action-copy">
-          <h3>组队投票</h3>
+          <h3>队伍：{room.proposedTeam.map((id) => name(id)).join('、')}</h3>
           <p>
-            {room.proposedTeam.map((id) => name(id)).join('、')}
-            <br />
             {room.teamVotedIds.length} / {room.players.length} 人已投票
           </p>
         </div>
@@ -741,6 +734,7 @@ export default function App() {
   useMobileViewport();
   const game = useGame();
   const [tab, setTab] = useState<Tab>('table');
+  const [rulesExpanded, setRulesExpanded] = useState(false);
   const [selection, setSelection] = useState<string[]>([]);
   const [dialog, setDialog] = useState<
     'share' | 'rules' | 'help' | 'manage' | 'players' | 'assassinate' | null
@@ -976,7 +970,7 @@ export default function App() {
               </button>
             </div>
           )}
-          {game.error && (
+          {game.error && !game.errorIsNetwork && (
             <div className="error-banner" role="alert">
               <span>{game.error}</span>
               <button className="icon-button" onClick={game.clearError} aria-label="关闭错误提示">
@@ -1027,13 +1021,6 @@ export default function App() {
                   <RefreshCw size={17} className={game.refreshing ? 'spinning' : ''} />
                   {game.refreshing ? '刷新中' : '刷新'}
                 </button>
-                <span className="pill">
-                  <Users size={13} />
-                  {room!.players.length} / {room!.config.playerCount} 人
-                </span>
-                <span className="pill subtle">
-                  {room!.config.preset === 'standard' ? '标准规则' : '自定义扩展'}
-                </span>
               </div>
             </div>
             <div hidden={tab !== 'table'} className="table-page">
@@ -1048,44 +1035,44 @@ export default function App() {
                 onSort={beginSorting}
                 displayName={displayName}
               />
-              <div className="card mission-board">
-                <div className="subheading">
-                  <h2>
-                    <Flag size={17} />
-                    任务进程
-                  </h2>
-                  <span className="small muted">目标 {room!.config.winsRequired} 次</span>
-                </div>
-                <QuestTrack room={room!} />
-                <div className="mission-footer">
-                  <span>
-                    <i className="dot good" />
-                    好人 <strong>{room!.quests.filter((q) => q.passed).length}</strong>
-                    <span className="score-divider">:</span>
-                    <strong>{room!.quests.filter((q) => !q.passed).length}</strong> 坏人
-                    <i className="dot evil" />
-                  </span>
-                  <div className="rejection-meter">
-                    <span>连续拒绝</span>
-                    <div
-                      aria-label={`连续拒绝 ${room!.rejectionCount}/${room!.config.rejectionLimit}`}
+              {room!.phase !== 'lobby' && (
+                <div className="card mission-board">
+                  <div className="subheading">
+                    <h2>
+                      <Flag size={17} />
+                      任务
+                    </h2>
+                    <span
+                      className="mission-score"
+                      aria-label={`好人 ${room!.quests.filter((q) => q.passed).length} 比坏人 ${room!.quests.filter((q) => !q.passed).length}`}
                     >
-                      {Array.from({ length: room!.config.rejectionLimit }, (_, index) => (
-                        <i key={index} className={index < room!.rejectionCount ? 'filled' : ''} />
-                      ))}
+                      <i className="dot good" />
+                      <strong>{room!.quests.filter((q) => q.passed).length}</strong>
+                      <span className="score-divider">:</span>
+                      <strong>{room!.quests.filter((q) => !q.passed).length}</strong>
+                      <i className="dot evil" />
+                    </span>
+                    <div className="rejection-meter">
+                      <span>拒绝</span>
+                      <strong
+                        aria-label={`连续拒绝 ${room!.rejectionCount}/${room!.config.rejectionLimit}`}
+                      >
+                        {room!.rejectionCount}/{room!.config.rejectionLimit}
+                      </strong>
                     </div>
-                    <strong>
-                      {room!.rejectionCount}/{room!.config.rejectionLimit}
-                    </strong>
                   </div>
+                  <QuestTrack room={room!} />
                 </div>
-              </div>
+              )}
               <div className="table-columns">
                 <section className="card player-board">
                   <div className="subheading">
                     <h2>
                       <Users size={18} />
-                      玩家
+                      玩家{' '}
+                      <span className="player-count">
+                        {room!.players.length}/{room!.config.playerCount}
+                      </span>
                     </h2>
                     <div className="player-tools">
                       {isHost && canChangeOrder && !sortOrder && (
@@ -1144,13 +1131,7 @@ export default function App() {
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    <p className="seat-order-hint">
-                      {room!.phase === 'lobby'
-                        ? '开局随机排序和发身份'
-                        : '按玩家卡从左到右循环带队'}
-                    </p>
-                  )}
+                  ) : null}
                   {sortError && (
                     <p className="error-box" role="alert">
                       {sortError}
@@ -1211,10 +1192,20 @@ export default function App() {
                 </section>
                 <aside className="card table-rules">
                   <div className="subheading">
-                    <h2>
-                      <ScrollText size={17} />
-                      本局规则
-                    </h2>
+                    <button
+                      className="rules-toggle"
+                      aria-label="本局规则"
+                      aria-expanded={rulesExpanded}
+                      aria-controls="room-rules-detail"
+                      onClick={() => setRulesExpanded(!rulesExpanded)}
+                    >
+                      <span>规则</span>
+                      <span className="rules-counts">
+                        好 {room!.config.playerCount - room!.config.evilCount} · 坏{' '}
+                        {room!.config.evilCount}
+                      </span>
+                      <ChevronDown size={16} className={rulesExpanded ? 'expanded' : ''} />
+                    </button>
                     {isHost && room!.phase === 'lobby' && (
                       <button className="text-button" onClick={() => setDialog('rules')}>
                         <Settings2 size={14} />
@@ -1222,10 +1213,17 @@ export default function App() {
                       </button>
                     )}
                   </div>
-                  <RulesSummary config={room!.config} />
-                  <button className="text-button" onClick={() => setDialog('help')}>
-                    了解玩法 <ArrowRight size={13} />
-                  </button>
+                  <div id="room-rules-detail" hidden={!rulesExpanded}>
+                    <span className="small muted">
+                      {room!.config.preset === 'standard' ? '标准规则' : '自定义扩展'} ·
+                      按玩家卡顺序循环带队
+                    </span>
+                    <RulesSummary config={room!.config} />
+                    {room!.phase === 'lobby' && <QuestTrack room={room!} />}
+                    <button className="text-button" onClick={() => setDialog('help')}>
+                      了解玩法 <ArrowRight size={13} />
+                    </button>
+                  </div>
                 </aside>
               </div>
               <div className="room-footer">

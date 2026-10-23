@@ -529,7 +529,7 @@ textarea {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 .room-heading-meta {
   display: flex;
@@ -538,7 +538,7 @@ textarea {
 }
 .table-page {
   display: grid;
-  gap: 16px;
+  gap: 10px;
 }
 .action-panel {
   display: flex;
@@ -569,6 +569,9 @@ textarea {
   margin-top: 5px;
   color: #4b6253;
 }
+.action-copy p:empty {
+  display: none;
+}
 .vote-action .action-buttons {
   min-width: 230px;
 }
@@ -595,7 +598,7 @@ textarea {
   display: flex;
   gap: 6px;
   overflow-x: auto;
-  margin: 18px 0 14px;
+  margin: 10px 0 0;
   padding-bottom: 4px;
 }
 .quest-step {
@@ -675,6 +678,36 @@ textarea {
   color: var(--muted);
   padding: 0 3px;
 }
+.mission-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  font-variant-numeric: tabular-nums;
+}
+.player-count,
+.rules-counts {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.rules-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  flex: 1;
+  font-size: 17px;
+  font-weight: 600;
+}
+.rules-toggle .expanded {
+  transform: rotate(180deg);
+}
+.table-rules {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
 .rejection-meter {
   display: flex;
   align-items: center;
@@ -708,8 +741,8 @@ textarea {
 .players-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px 6px;
-  margin-top: 12px;
+  gap: 6px;
+  margin-top: 4px;
 }
 .player-tools,
 .order-tools,
@@ -807,9 +840,9 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
   min-width: 0;
-  padding: 10px 3px;
+  padding: 8px 3px;
   border: 1px solid transparent;
   border-radius: 8px;
   text-align: center;
@@ -898,7 +931,9 @@ textarea {
   background: #edf5e9;
 }
 .player-seat .avatar {
-  margin-bottom: 2px;
+  width: 36px;
+  height: 36px;
+  font-size: 18px;
 }
 .avatar {
   width: 44px;
@@ -954,16 +989,17 @@ textarea {
   font-size: 16px;
   font-weight: 600;
   line-height: 1.4;
-  height: 2.8em;
+  height: 1.4em;
   max-width: 100%;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  display: block;
   overflow: hidden;
 }
 .player-name em {
-  display: inline-block;
+  position: absolute;
+  right: 4px;
+  top: 4px;
   margin-left: 3px;
   font-size: 11px;
   font-weight: 400;
@@ -974,7 +1010,10 @@ textarea {
   font-size: 12px;
   color: var(--muted);
   line-height: 1.4;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  height: 1.4em;
   max-width: 100%;
 }
 .empty-seat {
@@ -1765,29 +1804,29 @@ summary::-webkit-details-marker {
     padding: 20px;
   }
   .room-main {
-    padding: 16px 12px calc(88px + env(safe-area-inset-bottom, 0px));
+    padding: 6px 12px calc(80px + env(safe-area-inset-bottom, 0px));
   }
   .room-heading h1 {
     font-size: 22px;
   }
   .room-heading {
-    gap: 10px;
-    margin-bottom: 14px;
+    gap: 6px;
+    margin-bottom: 6px;
   }
   .room-heading-meta {
     flex-wrap: wrap;
   }
   .table-page {
-    gap: 12px;
+    gap: 8px;
   }
   .table-columns {
     grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
+    gap: 8px;
   }
   .mission-board,
   .player-board,
   .table-rules {
-    padding: 14px;
+    padding: 10px 12px;
   }
   .subheading {
     gap: 8px;
@@ -1797,8 +1836,8 @@ summary::-webkit-details-marker {
     gap: 6px;
   }
   .action-panel {
-    padding: 14px;
-    gap: 10px;
+    padding: 10px 12px;
+    gap: 8px;
   }
   .action-icon {
     display: none;
@@ -1820,7 +1859,7 @@ summary::-webkit-details-marker {
   }
   .quest-track {
     gap: 3px;
-    margin: 14px 0 12px;
+    margin: 8px 0 0;
   }
   .quest-step {
     flex-basis: 50px;
@@ -1846,10 +1885,33 @@ summary::-webkit-details-marker {
     display: none;
   }
   .player-seat {
-    padding: 8px 2px;
+    padding: 6px 2px;
   }
   .players-grid {
-    gap: 8px 4px;
+    gap: 4px;
+  }
+  .lobby-action .action-copy {
+    flex: 1 1 100px;
+  }
+  .lobby-action > .button {
+    flex: 0 0 auto;
+    width: auto;
+    min-height: 44px;
+    padding: 8px 12px;
+  }
+  .lobby-action .action-copy h3 {
+    font-size: 17px;
+  }
+  .table-rules {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+  .player-tools {
+    gap: 4px;
+  }
+  .player-tools .text-button {
+    min-width: 44px;
+    justify-content: center;
   }
   .notes-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -1862,7 +1924,7 @@ summary::-webkit-details-marker {
   }
   .notes-player {
     flex: 0 0 140px;
-    height: 64px;
+    height: 56px;
   }
   .notes-player > span:nth-child(2),
   .notes-player small {
@@ -1928,8 +1990,7 @@ summary::-webkit-details-marker {
     gap: 0;
   }
   .mission-board,
-  .player-board,
-  .table-rules {
+  .player-board {
     padding: 12px;
   }
   .mission-footer {
@@ -1938,6 +1999,9 @@ summary::-webkit-details-marker {
   }
   .form-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .note-editor .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .rules-editor .subheading {
     flex-wrap: wrap;

@@ -210,6 +210,147 @@ describe('network handoff recovery', () => {
   });
 });
 
+describe('quiet recovery after screen unlock', () => {
+  async function background() {
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('pagehide'));
+    });
+  }
+  async function foreground() {
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await flush();
+  }
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+    await flush();
+  }
+  it('silently retries a transient unlock failure and clears the notice before its deadline', async () => {
+    vi.useFakeTimers();
+    let failuresRemaining = 0;
+    handle((request) => {
+      if (request.action === 'get' && failuresRemaining-- > 0)
+        throw new TypeError('radio still waking');
+      return undefined;
+    });
+    await mount();
+    await background();
+    failuresRemaining = 1;
+    await foreground();
+    expect(current.connection).toBe('connecting');
+    expect(current.error).toBeNull();
+    const beforeRetry = requests().filter((request) => request.action === 'get').length;
+    await advance(4500);
+    expect(requests().filter((request) => request.action === 'get').length).toBeGreaterThan(
+      beforeRetry,
+    );
+    expect(current.connection).toBe('online');
+    expect(current.error).toBeNull();
+    await advance(6000);
+    expect(current.connection).toBe('online');
+    expect(current.error).toBeNull();
+  });
+  it('reports persistent failure after ten seconds despite repeated foreground hints', async () => {
+    vi.useFakeTimers();
+    let unavailable = false;
+    handle((request) => {
+      if (request.action === 'get' && unavailable) throw new TypeError('network unavailable');
+      return undefined;
+    });
+    await mount();
+    await background();
+    unavailable = true;
+    Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+    await foreground();
+    const initialReads = requests().filter((request) => request.action === 'get').length;
+    await advance(9000);
+    expect(requests().filter((request) => request.action === 'get').length).toBeGreaterThan(
+      initialReads,
+    );
+    await act(async () => {
+      window.dispatchEvent(new Event('pageshow'));
+      window.dispatchEvent(new Event('focus'));
+      window.dispatchEvent(new Event('online'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(current.connection).toBe('connecting');
+    expect(current.error).toBeNull();
+    await advance(1000);
+    expect(current.connection).toBe('offline');
+    expect(current.error).toContain('当前离线');
+    unavailable = false;
+    await act(async () => {
+      await current.refresh();
+    });
+    expect(current.connection).toBe('online');
+    expect(current.error).toBeNull();
+  });
+  it('removes a stale network alert immediately on unlock, but preserves business errors', async () => {
+    vi.useFakeTimers();
+    let unavailable = false;
+    handle((request) => {
+      if (request.action === 'get' && unavailable) throw new TypeError('network unavailable');
+      if (request.action === 'command') return rejection('FORBIDDEN');
+    });
+    await mount();
+    unavailable = true;
+    await act(async () => {
+      await current.refresh();
+    });
+    expect(current.connection).toBe('reconnecting');
+    expect(current.error).toContain('连接暂时中断');
+    await background();
+    await foreground();
+    expect(current.connection).toBe('connecting');
+    expect(current.error).toBeNull();
+    await act(async () => {
+      await current.command({ type: 'ready' });
+    });
+    expect(current.error).toBe('test-FORBIDDEN');
+    unavailable = false;
+    await act(async () => {
+      await current.refresh();
+    });
+    expect(current.connection).toBe('online');
+    expect(current.error).toBe('test-FORBIDDEN');
+  });
+  it('shows unconfirmed actions immediately during grace and never retries them automatically', async () => {
+    vi.useFakeTimers();
+    let unavailable = false;
+    handle((request) => {
+      if ((request.action === 'get' && unavailable) || request.action === 'command')
+        throw new TypeError('network unavailable');
+      return undefined;
+    });
+    await mount();
+    await background();
+    unavailable = true;
+    await foreground();
+    await act(async () => {
+      await current.command({ type: 'questVote', success: false });
+    });
+    expect(current.pending).toBe(true);
+    expect(current.error).toContain('尚未确认操作结果');
+    await advance(4500);
+    expect(requests().filter((request) => request.action === 'command')).toHaveLength(1);
+    expect(current.error).toContain('尚未确认操作结果');
+    unavailable = false;
+    await act(async () => {
+      await current.refresh();
+    });
+    expect(current.connection).toBe('online');
+    expect(current.pending).toBe(true);
+    expect(current.error).toContain('尚未确认操作结果');
+    expect(requests().filter((request) => request.action === 'command')).toHaveLength(1);
+  });
+});
+
 describe('browser session recovery and mutation safety', () => {
   it('recovers a failed fresh boot on an online event using the same durable device identity', async () => {
     let authCalls = 0;
