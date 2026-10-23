@@ -46,10 +46,12 @@ npm run test:e2e
 3. 获取两条连接串：
    - owner 的 direct、non-pooler 连接串，用作 `NEON_DIRECT_DATABASE_URL`；
    - `avalon_runtime` 的 pooled 连接串，用作 `NEON_DATABASE_URL`。
-4. 使用 owner direct 连接执行 `migrations/0001_avalon.sql`。migration 会撤销公开表权限，只授予 `avalon_runtime` 三个应用函数的执行权限。
-5. 验证 `avalon_runtime` 能调用 `avalon_get`、`avalon_commit`、`avalon_cleanup`，且不能直接查询 `avalon_documents`。
+4. 使用 owner direct 连接按文件名顺序执行全部 `migrations/*.sql`。migration 会撤销公开表权限，只授予 `avalon_runtime` 应用函数的执行权限。
+5. 验证 `avalon_runtime` 能调用 `avalon_get`、`avalon_get_cached`、`avalon_commit`、`avalon_cleanup`，且不能直接查询 `avalon_documents`。
 
 GitHub 部署每次都会幂等执行 `migrations/*.sql`，运行时 Worker 永远不持有 owner 连接串。
+
+2026-10-23 新增的 `0002_conditional_snapshots.sql` 只增加条件读取函数，不删除数据或更改角色身份。正常 Actions 发布会自动应用；手动发布必须先执行全部 migration。旧版本仍可使用原读取函数回滚。PWA 与主题无需新域名、绑定或密钥。
 
 ## 3. GitHub Actions 配置
 

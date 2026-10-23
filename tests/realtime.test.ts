@@ -13,6 +13,7 @@ describe('Avalon realtime tickets', () => {
         roomInstanceId: 'room_instance_123456',
         gameId: 'game_123456',
         version: 19,
+        connectionId: 'page_1234567890123456',
       },
       secret,
       now,
@@ -22,6 +23,7 @@ describe('Avalon realtime tickets', () => {
       roomInstanceId: 'room_instance_123456',
       gameId: 'game_123456',
       version: 19,
+      connectionId: 'page_1234567890123456',
     });
     expect(() => verifyRealtimeTicket(`${issued.ticket}x`, secret, now + 10_000)).toThrow(
       '实时连接已失效',

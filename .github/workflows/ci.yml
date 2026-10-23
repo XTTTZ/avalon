@@ -61,14 +61,16 @@ jobs:
       - name: Run unit tests
         run: npm test
 
-      - name: Test PostgreSQL schema and cleanup behavior
+      - name: Test PostgreSQL schema, cleanup and revision cache
         env:
           PGHOST: localhost
           PGPORT: '5432'
           PGDATABASE: avalon_test
           PGUSER: postgres
           PGPASSWORD: local-test-only
-        run: psql -X -v ON_ERROR_STOP=1 -f tests/postgres-cleanup.sql
+        run: |
+          psql -X -v ON_ERROR_STOP=1 -f tests/postgres-cleanup.sql
+          psql -X -v ON_ERROR_STOP=1 -f tests/postgres-cache.sql
 
       - name: Build the production application
         env:

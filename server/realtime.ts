@@ -4,6 +4,7 @@ import { GameError, type RealtimeNotice, type RealtimeTicket } from '../shared/t
 const TICKET_TTL = 30_000;
 
 export interface RealtimeTicketClaims {
+  connectionId?: string;
   userId: string;
   sessionExpiresAt: number;
   roomInstanceId: string;
@@ -12,6 +13,7 @@ export interface RealtimeTicketClaims {
 }
 
 export interface VerifiedRealtimeTicket {
+  connectionId?: string;
   userId: string;
   roomInstanceId: string;
   gameId: string;
@@ -44,6 +46,7 @@ export function issueRealtimeTicket(
   const body = Buffer.from(
     JSON.stringify({
       v: 1,
+      connectionId: claims.connectionId,
       userId: claims.userId,
       roomInstanceId: claims.roomInstanceId,
       gameId: claims.gameId,
@@ -88,6 +91,9 @@ export function verifyRealtimeTicket(
   }
   if (
     payload.v !== 1 ||
+    (payload.connectionId !== undefined &&
+      (typeof payload.connectionId !== 'string' ||
+        !/^[A-Za-z0-9_-]{16,80}$/.test(payload.connectionId))) ||
     !validIdentifier(payload.userId, 100) ||
     !validIdentifier(payload.roomInstanceId, 160) ||
     !validIdentifier(payload.gameId, 100) ||
@@ -102,6 +108,7 @@ export function verifyRealtimeTicket(
   )
     throw invalidTicket();
   return {
+    ...(typeof payload.connectionId === 'string' ? { connectionId: payload.connectionId } : {}),
     userId: payload.userId,
     roomInstanceId: payload.roomInstanceId,
     gameId: payload.gameId,

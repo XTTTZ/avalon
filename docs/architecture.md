@@ -62,9 +62,29 @@ API 的 `userId` 从服务端签名会话提取，玩家公开 playerId 为独�
 
 ## 登录与恢复
 
+### 数据库流量优化
+
+Worker 暖实例复用一个按数据库连接隔离的 `NeonStore`。仅缓存已完成的 rooms/users JSON 快照，最多 64 条、合计约 8 MiB；单条超过 4 MiB 时跳过。每次读取调用 `avalon_get_cached`，由数据库核对 UUID revision：相同仅返回修订号，变化返回新快照，删除返回空值。缓存没有跳过鉴权的 TTL 窗口，所有响应仍经 `projectRoom`；私人笔记不进入跨请求缓存。
+
+事务使用实际查询确认过的 revision 执行原子 CAS。缓存值通过 JSON 解析及拷贝隔离，失败事务不会修改其他请求的快照；并发请求只复用各自发起查询时捕获的版本。到期判断仍使用 API 当前时间，删除重建换 UUID。新增 migration 保留旧 `avalon_get`，支持应用回滚。
+
+这减少的是 Neon 到 Worker 的重复数据传输，并不免除数据库查询，也不保证固定的节省比例。冷启动、跨实例或房间每次变化时仍需取完整状态；实际收益应按 Neon 出站和 Worker 使用量观察。
+
+### 手机与 PWA
+
+浅色/深色/跟随系统偏好仅保存为 `avalon.theme`，首屏脚本在 React 加载前应用主题，系统模式响应系统外观变化。设置入口对所有玩家一致；二维码始终保留浅色背景，身份卡保持原有固定尺寸与自动隐藏逻辑。
+
+PWA 使用 Avalon 独立图标、manifest、安装提示和手机安全区域适配。生产 Service Worker 只拦截入口导航：在线直接走网络，断网显示静态重连页；API、WebSocket、身份、私人笔记和投票均不写 Cache Storage。没有 `skipWaiting`、强制刷新或安装后自动重载，避免打断进行中的游戏。离线页恢复网络后重新载入，由原会话恢复玩家。
+
+### 会话与网络
+
 生产使用 guest 身份。浏览器生成 256 位 deviceSecret，服务端使用稳定的 `IDENTITY_SECRET` 派生身份；会话由独立的 `SESSION_SECRET` 签名。会话有效 180 天，每次应用打开验证并刷新，服务器记录最近房间。本地只持久保存会话、deviceSecret 和房间位置，不缓存角色、任务选择或房间秘密。
 
 显式「刷新」读取完整的本人房间投影及本人笔记，保留页面/草稿，重复点击合并，失败可重试，不重复提交命令。活动页面先通过短时 ticket 连接房间 Durable Object；WebSocket 只通知 `{roomInstanceId, gameId, version}`，收到后再用 HTTP 拉取本人投影。订阅建立后立即复核版本以补首次读取和握手之间的窗口；重复、乱序和漏通知都由版本比较处理。后台停止连接和轮询，恢复前台/在线立即读状态。WS 失败使用有上限的退避和低频 polling，正常连接也保留稀疏 HTTP 核对。网络丢失导致结果不确定时，用户可重试同一 requestId；服务器始终防止重复投票与跨阶段重放。
+
+实时连接将 ticket 请求与 WebSocket 握手分别限时 30 秒；只有收到有效房间版本通知才视为订阅完成。每 20 秒检查心跳，未响应时重连；网络切换提示触发更短的存活检查。`navigator.onLine` 只影响提示，不能阻止实际请求，避免 VPN 导致恢复永久停止。前台事件共用连接，读取期间的新通知合并为一次后续读取；旧连接、旧房间和旧读取代次的迟到结果均被忽略。网络变化和手动刷新只取消读请求，绝不取消后自动重放秘密投票。
+
+每个页面随机生成 `connectionId`，经已签名 ticket 绑定用户；服务端替换同页遗留连接，同一玩家超出 3 个连接时退休最早的页面。被替换页面保留 HTTP 兜底，但不自动争抢 WebSocket，重新进入前台或手动刷新时可重新订阅。心跳由 DO 的自动应答处理，支持休眠，不需要每个 ping 都唤醒应用代码（[Cloudflare WebSocket 文档](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)）。
 
 ## Worker 与实时边界
 

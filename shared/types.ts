@@ -153,7 +153,7 @@ export type ApiRequest =
   | { action: 'create'; name: string; config: GameConfig; requestId: string }
   | { action: 'join'; code: string; name: string; requestId: string }
   | { action: 'get'; code: string; version?: number; gameId?: string }
-  | { action: 'realtime.ticket'; code: string; gameId: string }
+  | { action: 'realtime.ticket'; code: string; gameId: string; connectionId?: string }
   | {
       action: 'command';
       code: string;

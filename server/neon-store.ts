@@ -52,12 +52,36 @@ function validateConnectionString(connectionString: string) {
 /**
  * Optimistic Store adapter backed by server-only Neon functions.
  *
- * The application role has EXECUTE on the three functions and no direct table
+ * The application role has EXECUTE on the store functions and no direct table
  * privileges. Every mutation validates all read revisions and writes atomically
  * inside `avalon_commit`.
  */
 export class NeonStore implements Store {
   private readonly sql: NeonSqlClient;
+  // Only completed JSON is shared across requests, never a promise or request-owned I/O.
+  // Reuse is conditional on a fresh database revision check, not a time-based TTL.
+  private readonly cached = new Map<string, { revision: string; json: string }>();
+  private cachedBytes = 0;
+
+  private remember(key: string, snapshot: Snapshot) {
+    const previous = this.cached.get(key);
+    if (previous) this.cachedBytes -= previous.json.length * 2;
+    this.cached.delete(key);
+    if (!snapshot.revision || snapshot.value === null) return;
+    const json = JSON.stringify(snapshot);
+    const bytes = json.length * 2;
+    if (bytes > 4 * 1024 * 1024) return;
+    while (
+      this.cached.size &&
+      (this.cached.size >= 64 || this.cachedBytes + bytes > 8 * 1024 * 1024)
+    ) {
+      const oldest = this.cached.keys().next().value!;
+      this.cachedBytes -= this.cached.get(oldest)!.json.length * 2;
+      this.cached.delete(oldest);
+    }
+    this.cached.set(key, { revision: snapshot.revision, json });
+    this.cachedBytes += bytes;
+  }
 
   constructor(connectionString: string, factory: NeonFactory = neon as unknown as NeonFactory) {
     validateConnectionString(connectionString);
@@ -76,8 +100,24 @@ export class NeonStore implements Store {
   }
 
   private async snapshot(collection: Collection, id: string): Promise<Snapshot> {
-    const rows = await this.query('SELECT public.avalon_get($1, $2) AS snapshot', [collection, id]);
-    const snapshot = rows[0]?.snapshot;
+    const cacheable = collection === 'rooms' || collection === 'users';
+    const key = `${collection}/${id}`;
+    // Capture the exact payload we asked Neon to confirm. Another request can
+    // replace or evict this key while the HTTP query is in flight.
+    const cached = cacheable ? this.cached.get(key) : undefined;
+    const rows = await this.query(
+      cacheable
+        ? 'SELECT public.avalon_get_cached($1, $2, $3::uuid) AS snapshot'
+        : 'SELECT public.avalon_get($1, $2) AS snapshot',
+      cacheable ? [collection, id, cached?.revision ?? null] : [collection, id],
+    );
+    const snapshot = rows[0]?.snapshot as (Snapshot & { unchanged?: boolean }) | undefined;
+    if (rows.length !== 1) throw new Error('Database operation failed');
+    if (snapshot?.unchanged === true) {
+      if (!cached || snapshot.revision !== cached.revision)
+        throw new Error('Database operation failed');
+      return JSON.parse(cached.json) as Snapshot;
+    }
     if (
       !snapshot ||
       typeof snapshot !== 'object' ||
@@ -87,6 +127,7 @@ export class NeonStore implements Store {
         typeof (snapshot as Snapshot).revision !== 'string')
     )
       throw new Error('Database operation failed');
+    if (cacheable) this.remember(key, snapshot);
     return snapshot as Snapshot;
   }
 

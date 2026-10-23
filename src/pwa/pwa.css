@@ -1,0 +1,37 @@
+.app {
+  min-height: 100dvh;
+}
+.app-header {
+  padding-top: max(8px, env(safe-area-inset-top, 0px));
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+}
+.room-main {
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+}
+.bottom-nav {
+  padding-left: max(8px, env(safe-area-inset-left, 0px));
+  padding-right: max(8px, env(safe-area-inset-right, 0px));
+}
+.keyboard-open .bottom-nav {
+  visibility: hidden;
+  pointer-events: none;
+}
+.keyboard-open .modal-backdrop {
+  top: var(--viewport-top, 0px);
+  bottom: auto;
+  height: var(--visible-height, 100dvh);
+}
+.keyboard-open .modal {
+  max-height: calc(var(--visible-height, 100dvh) - 12px);
+}
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  html,
+  body {
+    background: var(--paper);
+  }
+  .welcome {
+    padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  }
+}

@@ -1,0 +1,264 @@
+:root {
+  color-scheme: light;
+  color: var(--ink);
+  background: var(--paper);
+}
+body {
+  background: var(--paper);
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --paper: #101a15;
+  --card: #19261f;
+  --ink: #e6eee8;
+  --muted: #a6b6ab;
+  --forest: #95d7ad;
+  --forest-light: #263e30;
+  --line: #36483d;
+  --red: #ffa397;
+  --solid-green: #36764f;
+  --solid-red: #a33f38;
+  --dark-selected: #304d39;
+}
+:root[data-theme='dark'] :is(input, select, textarea, .number-stepper, .target-chip) {
+  background: var(--card);
+  border-color: var(--line);
+}
+:root[data-theme='dark'] :is(input::placeholder, textarea::placeholder) {
+  color: var(--muted);
+}
+:root[data-theme='dark'] :is(input:disabled, input[readonly], .number-stepper.disabled) {
+  background: var(--paper);
+}
+:root[data-theme='dark'] .number-stepper > input {
+  border-color: var(--line);
+}
+:root[data-theme='dark']
+  :is(
+    .button.primary,
+    .segmented .selected,
+    .count-picker .selected,
+    .passed .quest-token,
+    .selected-marker
+  ) {
+  background: var(--solid-green);
+  border-color: var(--solid-green);
+  color: #fff;
+}
+:root[data-theme='dark'] .failed .quest-token {
+  background: var(--solid-red);
+  border-color: var(--solid-red);
+  color: #fff;
+}
+:root[data-theme='dark'] .button.secondary {
+  background: var(--card);
+  border-color: #56745e;
+}
+:root[data-theme='dark']
+  :is(
+    .button.danger,
+    .error-banner,
+    .error-box,
+    .result-badge.evil,
+    .public-votes > .evil,
+    .finish-banner.evil
+  ) {
+  background: #412924;
+  border-color: #755047;
+  color: var(--red);
+}
+:root[data-theme='dark']
+  :is(
+    .segmented,
+    .pill.subtle,
+    .room-badge,
+    .leader-queue li,
+    .empty-seat .avatar,
+    .quest-editor-head
+  ) {
+  background: #223329;
+}
+:root[data-theme='dark'] :is(.connection-banner, .pending-banner, .notice) {
+  background: #3b3321;
+  border-color: #6c5a34;
+  color: #edd299;
+}
+:root[data-theme='dark']
+  :is(
+    .action-panel,
+    .current .quest-token,
+    .player-seat.is-sortable,
+    .player-seat.is-selected,
+    .bottom-nav button.active,
+    .result-badge,
+    .public-votes > span,
+    .finish-banner
+  ) {
+  background: var(--forest-light);
+  border-color: #4a6953;
+}
+:root[data-theme='dark'] .action-copy p {
+  color: var(--muted);
+}
+:root[data-theme='dark'] .quest-token {
+  background: #223329;
+  border-color: var(--line);
+  color: var(--muted);
+}
+:root[data-theme='dark'] .current .quest-token {
+  background: var(--forest-light);
+  border-color: var(--forest);
+  color: var(--forest);
+}
+:root[data-theme='dark'] .passed .quest-token {
+  background: var(--solid-green);
+  border-color: var(--solid-green);
+  color: #fff;
+}
+:root[data-theme='dark'] .failed .quest-token {
+  background: var(--solid-red);
+  border-color: var(--solid-red);
+  color: #fff;
+}
+:root[data-theme='dark'] .rejection-meter i {
+  background: var(--line);
+}
+:root[data-theme='dark'] .rejection-meter i.filled {
+  background: var(--red);
+}
+:root[data-theme='dark']
+  :is(
+    .leader-queue .current-leader,
+    .player-seat.is-dragging,
+    .selected-avatar,
+    .target-chip.selected,
+    .notes-player.selected,
+    .number-stepper > button:active:not(:disabled)
+  ) {
+  background: var(--dark-selected);
+  border-color: #7fa98b;
+}
+:root[data-theme='dark'] .avatar {
+  background: #263e30;
+  border-color: #4a6953;
+}
+:root[data-theme='dark'] .selected-avatar {
+  background: var(--dark-selected);
+  border-color: #7fa98b;
+}
+:root[data-theme='dark'] .leader-marker {
+  color: #efd197;
+  background: #53432a;
+}
+:root[data-theme='dark'] :is(.empty-seat, .empty-seat .avatar) {
+  color: #91a396;
+}
+:root[data-theme='dark'] .bottom-nav {
+  background: var(--card);
+}
+/* Secrets keep a separate low-glare surface and unchanged geometry. */
+:root[data-theme='dark'] .secret-card {
+  background: #1a3427;
+  color: #e6eee8;
+}
+:root[data-theme='dark'] .hold-button {
+  background: #34533e;
+  color: #e6eee8;
+}
+:root[data-theme='dark'] .modal-backdrop {
+  background: #020805b3;
+}
+.qr-frame {
+  background: #fffef9;
+}
+:root[data-theme='dark'] .public-votes > .evil {
+  background: #412924;
+}
+.preferences-dialog {
+  width: min(420px, calc(100% - 24px));
+  max-height: calc(
+    100dvh - 48px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+  );
+  padding: 0 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  overscroll-behavior: contain;
+}
+.preferences-dialog::backdrop {
+  background: #02080599;
+}
+.preferences-dialog .modal-top h2 {
+  font-size: 18px;
+}
+.theme-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.theme-options button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 72px;
+  gap: 8px;
+  padding: 8px 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.theme-options button[aria-pressed='true'] {
+  background: var(--forest-light);
+  border-color: var(--forest);
+  color: var(--forest);
+}
+.install-section {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.install-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.install-heading img {
+  border-radius: 12px;
+}
+.install-heading h3 {
+  font-size: 17px;
+}
+.install-heading p,
+.install-guide {
+  color: var(--muted);
+  font-size: 14px;
+}
+@media (max-width: 360px) {
+  .in-room .app-header {
+    padding-inline: 8px;
+  }
+  .in-room .wordmark > span {
+    font-size: 16px;
+  }
+  .in-room .header-actions {
+    gap: 0;
+  }
+  .in-room .room-badge {
+    padding-inline: 5px;
+    gap: 3px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

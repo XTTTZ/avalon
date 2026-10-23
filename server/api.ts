@@ -78,7 +78,7 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
     create: ['name', 'config', 'requestId'],
     join: ['code', 'name', 'requestId'],
     get: ['code', 'version', 'gameId'],
-    'realtime.ticket': ['code', 'gameId'],
+    'realtime.ticket': ['code', 'gameId', 'connectionId'],
     command: ['code', 'command', 'expectedVersion', 'phaseKey', 'requestId'],
     'notes.get': ['code'],
     'notes.save': ['code', 'notes', 'expectedRevision'],
@@ -108,6 +108,13 @@ function validateRequest(request: unknown): asserts request is ApiRequest {
     (request.action === 'get' || request.action === 'realtime.ticket') &&
     request.gameId !== undefined &&
     (typeof request.gameId !== 'string' || !request.gameId || request.gameId.length > 100)
+  )
+    invalid();
+  if (
+    request.action === 'realtime.ticket' &&
+    request.connectionId !== undefined &&
+    (typeof request.connectionId !== 'string' ||
+      !/^[A-Za-z0-9_-]{16,80}$/.test(request.connectionId))
   )
     invalid();
   if (request.action === 'command') {
@@ -322,7 +329,11 @@ export async function handleApi(
 
   if (request.action === 'realtime.ticket') {
     const authorization = await authorizeRealtime(request.code, request.gameId, token, deps);
-    return issueRealtimeTicket(authorization, deps.auth.sessionSecret, now);
+    return issueRealtimeTicket(
+      { ...authorization, connectionId: request.connectionId },
+      deps.auth.sessionSecret,
+      now,
+    );
   }
 
   if (request.action === 'get') {

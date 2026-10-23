@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { RoomRealtime } from './realtime';
+import { subscribeNetworkChanges, withAbort } from './network';
 import type {
   ApiErrorCode,
   ApiRequest,
@@ -6,7 +8,6 @@ import type {
   GameConfig,
   Notes,
   NotesResult,
-  RealtimeNotice,
   RealtimeTicket,
   RoomView,
   Session,
@@ -63,22 +64,32 @@ export function randomId() {
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
-export async function apiCall<T>(request: ApiRequest, token?: string): Promise<T> {
+export async function apiCall<T>(
+  request: ApiRequest,
+  token?: string,
+  signal?: AbortSignal,
+): Promise<T> {
   const abort = new AbortController();
-  const timeout = window.setTimeout(() => abort.abort(), 18000);
+  const cancel = () => abort.abort();
+  if (signal?.aborted) abort.abort();
+  signal?.addEventListener('abort', cancel, { once: true });
+  const timeout = window.setTimeout(cancel, 30_000);
   try {
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(request),
-      signal: abort.signal,
-      cache: 'no-store',
-      credentials: 'omit',
-    });
-    const body = (await response.json()) as {
+    const response = await withAbort(
+      fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(request),
+        signal: abort.signal,
+        cache: 'no-store',
+        credentials: 'omit',
+      }),
+      abort.signal,
+    );
+    const body = (await withAbort(response.json(), abort.signal)) as {
       ok: boolean;
       data: T;
       error?: { code: ApiErrorCode; message: string };
@@ -90,25 +101,27 @@ export async function apiCall<T>(request: ApiRequest, token?: string): Promise<T
       );
     return body.data;
   } catch (error) {
+    if (signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
     if (error instanceof ClientError) throw error;
     throw new ClientError(
       'NETWORK',
       navigator.onLine ? '连接暂时中断，正在重新连接。' : '当前离线，连接恢复后会自动同步。',
     );
   } finally {
+    signal?.removeEventListener('abort', cancel);
     window.clearTimeout(timeout);
   }
 }
 
-let authenticating: Promise<Session> | null = null;
-async function authenticate(): Promise<Session> {
+let authenticating: { promise: Promise<Session>; signal?: AbortSignal } | null = null;
+async function authenticate(signal?: AbortSignal): Promise<Session> {
   // Also coalesce event-driven retry and mount work.
-  if (authenticating) return authenticating;
-  authenticating = (async () => {
+  if (authenticating && !authenticating.signal?.aborted) return authenticating.promise;
+  const promise = (async () => {
     const saved = read<Session>(KEY_SESSION);
     if (saved?.token && saved.expiresAt > Date.now() && saved.provider === 'guest') {
       try {
-        const renewed = await apiCall<Session>({ action: 'session' }, saved.token);
+        const renewed = await apiCall<Session>({ action: 'session' }, saved.token, signal);
         remember(KEY_SESSION, renewed);
         return renewed;
       } catch (error) {
@@ -122,14 +135,20 @@ async function authenticate(): Promise<Session> {
       device = randomId();
       write(KEY_DEVICE, device);
     }
-    const result = await apiCall<Session>({ action: 'auth.guest', deviceSecret: device });
+    const result = await apiCall<Session>(
+      { action: 'auth.guest', deviceSecret: device },
+      undefined,
+      signal,
+    );
     remember(KEY_SESSION, result);
     return result;
   })();
+  const flight = { promise, signal };
+  authenticating = flight;
   try {
-    return await authenticating;
+    return await promise;
   } finally {
-    authenticating = null;
+    if (authenticating === flight) authenticating = null;
   }
 }
 
@@ -138,20 +157,9 @@ type PendingRequest = Extract<ApiRequest, { action: 'create' | 'join' | 'command
 function sameMembership(previous: RoomView | null, next: RoomView): boolean {
   return (
     previous?.room.code === next.room.code &&
+    previous.room.instanceId === next.room.instanceId &&
     previous.room.createdAt === next.room.createdAt &&
     previous.self.playerId === next.self.playerId
-  );
-}
-function realtimeNotice(value: unknown): value is RealtimeNotice {
-  if (!value || typeof value !== 'object') return false;
-  const notice = value as Partial<RealtimeNotice>;
-  return (
-    notice.type === 'room-version' &&
-    typeof notice.roomInstanceId === 'string' &&
-    typeof notice.gameId === 'string' &&
-    Number.isSafeInteger(notice.version) &&
-    Number(notice.version) >= 1 &&
-    (notice.closed === undefined || typeof notice.closed === 'boolean')
   );
 }
 export function useGame() {
@@ -170,9 +178,18 @@ export function useGame() {
   const viewRef = useRef<RoomView | null>(null);
   const pendingRef = useRef<PendingRequest | null>(null);
   const busyRef = useRef(false);
-  const pollingRef = useRef(false);
-  const bootingRef = useRef(false);
-  const realtimeRef = useRef<WebSocket | null>(null);
+  const syncFlight = useRef<{
+    controller: AbortController;
+    promise: Promise<void>;
+    queued: boolean;
+  } | null>(null);
+  const bootingRef = useRef<AbortController | null>(null);
+  const realtimeRef = useRef<RoomRealtime | null>(null);
+  const realtimeConnected = useRef(false);
+  const reschedulePolling = useRef<() => void>(() => {});
+  const restorePending = useRef(true);
+  const connectionId = useRef<string | null>(null);
+  if (!connectionId.current) connectionId.current = randomId();
   const failures = useRef(0);
   const unchanged = useRef(0);
   const notesRevisionRef = useRef(0);
@@ -198,6 +215,8 @@ export function useGame() {
       if (sameMember && previous!.room.version > next.room.version) return;
       if (!sameMember) {
         scope.current++;
+        syncFlight.current?.controller.abort();
+        syncFlight.current = null;
         pendingRef.current = null;
         setPending(false);
         setNotes({});
@@ -205,6 +224,7 @@ export function useGame() {
         notesRevisionRef.current = 0;
       }
       viewRef.current = next;
+      restorePending.current = false;
       setView(next);
       remember(KEY_ROOM, next.room.code);
       rememberLastRoom(next.room.code);
@@ -242,7 +262,10 @@ export function useGame() {
     }
   }, []);
   const leaveView = useCallback(() => {
+    restorePending.current = false;
     scope.current++;
+    syncFlight.current?.controller.abort();
+    syncFlight.current = null;
     pendingRef.current = null;
     setPending(false);
     viewRef.current = null;
@@ -265,13 +288,15 @@ export function useGame() {
   }, []);
   const initialize = useCallback(
     async (forceRestore = false) => {
-      if (bootingRef.current) return;
+      if (bootingRef.current || document.hidden) return;
       const requestScope = scope.current;
-      bootingRef.current = true;
+      const controller = new AbortController();
+      bootingRef.current = controller;
+      restorePending.current = true;
       setLoading(true);
       setError(null);
       try {
-        const current = await authenticate();
+        const current = await authenticate(controller.signal);
         if (!alive.current || scope.current !== requestScope) return;
         sessionRef.current = current;
         setSession(current);
@@ -290,6 +315,7 @@ export function useGame() {
             const restored = await apiCall<RoomView>(
               { action: 'get', code: resume },
               current.token,
+              controller.signal,
             );
             if (!alive.current || scope.current !== requestScope) return;
             acceptView(restored);
@@ -309,78 +335,116 @@ export function useGame() {
             } else throw err;
           }
         }
+        if (!controller.signal.aborted) restorePending.current = false;
       } catch (err) {
-        if (alive.current && scope.current === requestScope) markError(err);
+        if (!controller.signal.aborted && alive.current && scope.current === requestScope)
+          markError(err);
       } finally {
-        bootingRef.current = false;
-        if (alive.current) setLoading(false);
+        if (bootingRef.current === controller) {
+          bootingRef.current = null;
+          if (alive.current) setLoading(false);
+        }
       }
     },
     [acceptView, loadNotes, leaveView, markError],
   );
 
-  const sync = useCallback(async () => {
+  const sync = useCallback((): Promise<void> => {
     const current = sessionRef.current;
     const previous = viewRef.current;
-    if (!current || !previous || pollingRef.current || document.hidden) return;
-    pollingRef.current = true;
-    const requestScope = scope.current;
-    try {
-      const result = await apiCall<RoomView | { unchanged: true; version: number }>(
-        {
-          action: 'get',
-          code: previous.room.code,
-          version: previous.room.version,
-          gameId: previous.room.gameId,
-        },
-        current.token,
-      );
-      if (
-        !alive.current ||
-        requestScope !== scope.current ||
-        viewRef.current?.room.code !== previous.room.code
-      )
-        return;
-      if ('unchanged' in result) unchanged.current += 1;
-      else {
-        unchanged.current = 0;
-        const changedMembership = !sameMembership(viewRef.current, result);
-        acceptView(result);
-        if (changedMembership)
-          await loadNotes(result.room.code, current.token).catch((err) => {
-            if (alive.current && sameMembership(viewRef.current, result)) markError(err);
-          });
-      }
-      failures.current = 0;
-      setConnection('online');
-      setError((old) => (old?.includes('连接') || old?.includes('离线') ? null : old));
-    } catch (err) {
-      if (
-        !alive.current ||
-        requestScope !== scope.current ||
-        viewRef.current?.room.code !== previous.room.code ||
-        viewRef.current.room.version > previous.room.version
-      )
-        return;
-      if (err instanceof ClientError && ['FORBIDDEN', 'NOT_FOUND', 'EXPIRED'].includes(err.code)) {
-        leaveView();
-        setError(err.message);
-      } else if (err instanceof ClientError && err.code === 'UNAUTHORIZED') {
-        sessionRef.current = null;
-        setSession(null);
-        await initialize();
-      } else markError(err);
-    } finally {
-      pollingRef.current = false;
+    if (!current || !previous || document.hidden) return Promise.resolve();
+    if (syncFlight.current) {
+      // A notice arriving during GET must cause one follow-up read, not disappear.
+      syncFlight.current.queued = true;
+      return syncFlight.current.promise;
     }
+    const flight = { controller: new AbortController(), promise: Promise.resolve(), queued: false };
+    syncFlight.current = flight;
+    const requestScope = scope.current;
+    flight.promise = (async () => {
+      do {
+        flight.queued = false;
+        const previous = viewRef.current;
+        if (!previous || flight.controller.signal.aborted || requestScope !== scope.current) break;
+        try {
+          const result = await apiCall<RoomView | { unchanged: true; version: number }>(
+            {
+              action: 'get',
+              code: previous.room.code,
+              version: previous.room.version,
+              gameId: previous.room.gameId,
+            },
+            current.token,
+            flight.controller.signal,
+          );
+          if (
+            !alive.current ||
+            requestScope !== scope.current ||
+            viewRef.current?.room.code !== previous.room.code
+          )
+            return;
+          if ('unchanged' in result) unchanged.current += 1;
+          else {
+            unchanged.current = 0;
+            const changedMembership = !sameMembership(viewRef.current, result);
+            acceptView(result);
+            if (changedMembership)
+              await loadNotes(result.room.code, current.token).catch((err) => {
+                if (alive.current && sameMembership(viewRef.current, result)) markError(err);
+              });
+          }
+          failures.current = 0;
+          setConnection('online');
+          setError((old) => (old?.includes('连接') || old?.includes('离线') ? null : old));
+        } catch (err) {
+          if (flight.controller.signal.aborted) return;
+          if (
+            !alive.current ||
+            requestScope !== scope.current ||
+            viewRef.current?.room.code !== previous.room.code ||
+            viewRef.current.room.version > previous.room.version
+          )
+            return;
+          if (
+            err instanceof ClientError &&
+            ['FORBIDDEN', 'NOT_FOUND', 'EXPIRED'].includes(err.code)
+          ) {
+            leaveView();
+            setError(err.message);
+          } else if (err instanceof ClientError && err.code === 'UNAUTHORIZED') {
+            sessionRef.current = null;
+            setSession(null);
+            await initialize();
+          } else markError(err);
+          return;
+        }
+      } while (flight.queued && !document.hidden && alive.current);
+    })().finally(() => {
+      if (syncFlight.current === flight) syncFlight.current = null;
+    });
+    return flight.promise;
   }, [acceptView, leaveView, markError, initialize, loadNotes]);
 
+  const cancelReads = useCallback(() => {
+    syncFlight.current?.controller.abort();
+    syncFlight.current = null;
+    bootingRef.current?.abort();
+    bootingRef.current = null;
+    if (alive.current) setLoading(false);
+  }, []);
+
   const refresh = useCallback(async () => {
-    if (!sessionRef.current || (!viewRef.current && failures.current > 0)) await initialize();
+    if (
+      !sessionRef.current ||
+      (!viewRef.current && (restorePending.current || failures.current > 0))
+    )
+      await initialize();
     else await sync();
   }, [initialize, sync]);
   const refreshNow = useCallback(async () => {
     if (refreshingRef.current) return;
+    cancelReads();
+    realtimeRef.current?.refresh();
     const current = sessionRef.current;
     const previous = viewRef.current;
     if (!current || !previous) return initialize();
@@ -413,7 +477,7 @@ export function useGame() {
       refreshingRef.current = false;
       if (alive.current) setRefreshing(false);
     }
-  }, [acceptView, initialize, leaveView, loadNotes, markError]);
+  }, [acceptView, initialize, leaveView, loadNotes, markError, cancelReads]);
   const restore = useCallback(async () => {
     await initialize(true);
   }, [initialize]);
@@ -422,125 +486,97 @@ export function useGame() {
     const expectedInstance = view?.room.instanceId;
     const expectedGame = view?.room.gameId;
     if (!REALTIME_ENABLED || !session?.token || !expectedInstance || !expectedGame) return;
-
-    let cancelled = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    let retryCount = 0;
-    const closeCurrent = () => {
-      const socket = realtimeRef.current;
-      realtimeRef.current = null;
-      if (socket && socket.readyState < WebSocket.CLOSING) socket.close(1000, 'Reconnect');
-    };
-    const schedule = () => {
-      if (cancelled || retryTimer) return;
-      const delay = Math.min(30_000, 1_000 * 2 ** Math.min(retryCount++, 5));
-      retryTimer = setTimeout(
-        () => {
-          retryTimer = undefined;
-          void connect();
-        },
-        delay + Math.floor(Math.random() * 300),
-      );
-    };
-    const connect = async () => {
-      if (cancelled) return;
-      if (document.hidden || !navigator.onLine) {
-        schedule();
-        return;
-      }
-      const currentSession = sessionRef.current;
-      const currentView = viewRef.current;
-      if (
-        !currentSession ||
-        currentSession.token !== session.token ||
-        currentView?.room.instanceId !== expectedInstance ||
-        currentView.room.gameId !== expectedGame
-      )
-        return;
-      try {
-        const ticket = await apiCall<RealtimeTicket>(
-          {
-            action: 'realtime.ticket',
-            code: currentView.room.code,
-            gameId: currentView.room.gameId,
-          },
-          currentSession.token,
-        );
-        if (cancelled) return;
-        const latest = viewRef.current;
-        if (
-          ticket.roomInstanceId !== expectedInstance ||
-          latest?.room.instanceId !== expectedInstance ||
-          latest.room.gameId !== expectedGame
-        )
-          return;
-        if (ticket.notice.version > latest.room.version) void sync();
-
-        const endpoint = new URL('/ws', location.href);
-        endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
-        const socket = new WebSocket(endpoint, ['avalon-v1', `avalon-ticket.${ticket.ticket}`]);
-        realtimeRef.current = socket;
-        socket.onopen = () => {
-          if (!cancelled) retryCount = 0;
-        };
-        socket.onmessage = (event) => {
-          if (cancelled || typeof event.data !== 'string' || event.data === 'pong') return;
-          let notice: unknown;
-          try {
-            notice = JSON.parse(event.data);
-          } catch {
-            socket.close(1008, 'Invalid notice');
-            return;
-          }
-          const current = viewRef.current;
+    const active = () =>
+      !document.hidden &&
+      sessionRef.current?.token === session.token &&
+      viewRef.current?.room.instanceId === expectedInstance &&
+      viewRef.current.room.gameId === expectedGame;
+    const realtime = new RoomRealtime({
+      roomInstanceId: expectedInstance,
+      active,
+      getTicket: async (signal) => {
+        const current = viewRef.current!;
+        try {
+          return await apiCall<RealtimeTicket>(
+            {
+              action: 'realtime.ticket',
+              code: current.room.code,
+              gameId: expectedGame,
+              connectionId: connectionId.current!,
+            },
+            session.token,
+            signal,
+          );
+        } catch (err) {
           if (
-            realtimeNotice(notice) &&
-            current?.room.instanceId === notice.roomInstanceId &&
-            (notice.closed ||
-              notice.gameId !== current.room.gameId ||
-              notice.version > current.room.version)
+            !signal.aborted &&
+            active() &&
+            err instanceof ClientError &&
+            ['FORBIDDEN', 'NOT_FOUND', 'EXPIRED', 'UNAUTHORIZED', 'CONFLICT'].includes(err.code)
           )
             void sync();
-        };
-        socket.onerror = () => socket.close();
-        socket.onclose = () => {
-          if (realtimeRef.current === socket) realtimeRef.current = null;
-          schedule();
-        };
-      } catch {
-        // Polling remains authoritative and reconnects continue with bounded backoff.
-        schedule();
-      }
-    };
-    const resume = () => {
-      if (cancelled || document.hidden || !navigator.onLine || realtimeRef.current) return;
-      if (retryTimer) clearTimeout(retryTimer);
-      retryTimer = undefined;
-      void connect();
-    };
-    window.addEventListener('online', resume);
-    document.addEventListener('visibilitychange', resume);
-    void connect();
+          throw err;
+        }
+      },
+      createSocket: (ticket) => {
+        const endpoint = new URL('/ws', location.href);
+        endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:';
+        return new WebSocket(endpoint, ['avalon-v1', `avalon-ticket.${ticket}`]);
+      },
+      connected: (connected) => {
+        const changed = realtimeConnected.current !== connected;
+        realtimeConnected.current = connected;
+        if (changed) reschedulePolling.current();
+      },
+      subscribed: () => {
+        void sync();
+      },
+      notice: (notice) => {
+        const current = viewRef.current;
+        if (
+          current?.room.instanceId === notice.roomInstanceId &&
+          (notice.closed ||
+            notice.gameId !== current.room.gameId ||
+            notice.version > current.room.version)
+        )
+          void sync();
+      },
+    });
+    realtimeRef.current = realtime;
+    const resume = () => realtime.resume();
+    const suspend = () => realtime.suspend();
+    const visibility = () => (document.hidden ? suspend() : resume());
+    const networkHint = () => realtime.networkChanged();
+    window.addEventListener('offline', networkHint);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('pagehide', suspend);
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', visibility);
+    resume();
     return () => {
-      cancelled = true;
-      if (retryTimer) clearTimeout(retryTimer);
-      closeCurrent();
-      window.removeEventListener('online', resume);
-      document.removeEventListener('visibilitychange', resume);
+      realtime.dispose();
+      if (realtimeRef.current === realtime) realtimeRef.current = null;
+      realtimeConnected.current = false;
+      reschedulePolling.current();
+      window.removeEventListener('offline', networkHint);
+      window.removeEventListener('pageshow', resume);
+      window.removeEventListener('pagehide', suspend);
+      window.removeEventListener('focus', resume);
+      document.removeEventListener('visibilitychange', visibility);
     };
   }, [session?.token, view?.room.instanceId, view?.room.gameId, sync]);
-
   useEffect(() => {
     alive.current = true;
     void initialize();
     let timer: ReturnType<typeof setTimeout>;
     const schedule = () => {
+      clearTimeout(timer);
       const current = viewRef.current;
       const activePhase =
         current &&
         ['reveal', 'teamVote', 'questVote', 'lady', 'assassination'].includes(current.room.phase);
-      const realtimeConnected = realtimeRef.current?.readyState === WebSocket.OPEN;
-      const base = realtimeConnected
+      const connected = realtimeConnected.current;
+      const base = connected
         ? 60_000
         : current?.room.phase === 'finished'
           ? 20_000
@@ -549,13 +585,16 @@ export function useGame() {
             : 8_000;
       const delay = failures.current
         ? Math.min(30000, 2000 * 2 ** Math.min(failures.current, 4))
-        : realtimeConnected
+        : connected
           ? base
           : Math.min(20_000, base + unchanged.current * 1000);
       timer = setTimeout(
         async () => {
-          if (!document.hidden && navigator.onLine) {
-            if (!sessionRef.current || (!viewRef.current && failures.current > 0))
+          if (!document.hidden) {
+            if (
+              !sessionRef.current ||
+              (!viewRef.current && (restorePending.current || failures.current > 0))
+            )
               await initialize();
             else await sync();
           }
@@ -564,6 +603,7 @@ export function useGame() {
         delay + Math.floor(Math.random() * 500),
       );
     };
+    reschedulePolling.current = schedule;
     schedule();
     const reconnect = () => {
       if (!document.hidden) {
@@ -571,20 +611,48 @@ export function useGame() {
         void refresh();
       }
     };
-    const offline = () => setConnection('offline');
+    let lastRestart = -Infinity;
+    const unsubscribeNetwork = subscribeNetworkChanges(() => {
+      if (document.hidden) return;
+      realtimeRef.current?.networkChanged();
+      if (Date.now() - lastRestart < 30_000) return;
+      lastRestart = Date.now();
+      cancelReads();
+      void refresh();
+    });
+    const hidden = () => {
+      if (document.hidden) cancelReads();
+    };
+    // OS offline can be inaccurate with VPNs: discard stale reads, then probe the origin.
+    const offline = () => {
+      cancelReads();
+      reconnect();
+    };
     window.addEventListener('online', reconnect);
     window.addEventListener('offline', offline);
     window.addEventListener('pageshow', reconnect);
+    window.addEventListener('focus', reconnect);
+    window.addEventListener('pagehide', cancelReads);
     document.addEventListener('visibilitychange', reconnect);
+    document.addEventListener('visibilitychange', hidden);
     return () => {
       alive.current = false;
       clearTimeout(timer);
+      reschedulePolling.current = () => {};
+      unsubscribeNetwork();
+      // React StrictMode immediately remounts; only abandon reads on a real unmount.
+      queueMicrotask(() => {
+        if (!alive.current) cancelReads();
+      });
       window.removeEventListener('online', reconnect);
       window.removeEventListener('offline', offline);
       window.removeEventListener('pageshow', reconnect);
+      window.removeEventListener('focus', reconnect);
+      window.removeEventListener('pagehide', cancelReads);
       document.removeEventListener('visibilitychange', reconnect);
+      document.removeEventListener('visibilitychange', hidden);
     };
-  }, [initialize, refresh, sync]);
+  }, [initialize, refresh, sync, cancelReads]);
 
   const execute = useCallback(
     async (request: PendingRequest) => {

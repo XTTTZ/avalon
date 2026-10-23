@@ -38,6 +38,8 @@ import { AssassinationPanel } from './components/AssassinationPanel';
 import { eventText, playerInitial, playerName } from './player-names';
 import { NotesPanel } from './components/NotesPanel';
 import { PlayerSeats } from './components/PlayerSeats';
+import { Preferences } from './components/Preferences';
+import { useMobileViewport } from './pwa/viewport';
 import './styles.css';
 
 type Tab = 'table' | 'identity' | 'notes' | 'history';
@@ -736,6 +738,7 @@ function History({
 }
 
 export default function App() {
+  useMobileViewport();
   const game = useGame();
   const [tab, setTab] = useState<Tab>('table');
   const [selection, setSelection] = useState<string[]>([]);
@@ -945,6 +948,7 @@ export default function App() {
           >
             <HelpCircle size={21} />
           </button>
+          <Preferences />
         </div>
       </header>
       {(game.error ||

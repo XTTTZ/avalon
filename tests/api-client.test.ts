@@ -106,6 +106,108 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
+
+describe('network handoff recovery', () => {
+  it('resumes initial room restoration when the network changes after login but before the first room read', async () => {
+    const held = deferred<Response>();
+    let gets = 0;
+    handle((request) =>
+      request.action === 'get' ? (++gets === 1 ? held.promise : response(roomView())) : undefined,
+    );
+    await mount();
+    expect(current.session).not.toBeNull();
+    expect(current.view).toBeNull();
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'));
+    });
+    await flush();
+    expect(gets).toBe(2);
+    expect(current.view?.room.code).toBe('123456');
+    expect(current.loading).toBe(false);
+    held.resolve(response(roomView('123456', 99)));
+    await flush();
+    expect(current.view?.room.version).toBe(2);
+  });
+  it('continues origin reads when a VPN makes navigator.onLine false', async () => {
+    Object.defineProperty(navigator, 'onLine', { configurable: true, value: false });
+    let gets = 0;
+    handle((request) =>
+      request.action === 'get' ? response(roomView('123456', ++gets + 1)) : undefined,
+    );
+    await mount();
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'));
+    });
+    await flush();
+    expect(gets).toBeGreaterThanOrEqual(2);
+    expect(current.connection).toBe('online');
+    expect(requests().filter((r) => r.action === 'command')).toHaveLength(0);
+  });
+  it('runs one follow-up read for notifications received during an in-flight read', async () => {
+    const held = deferred<Response>();
+    let gets = 0;
+    handle((request) => {
+      if (request.action === 'get')
+        return ++gets === 2 ? held.promise : response(roomView('123456', gets + 1));
+    });
+    await mount();
+    let reading!: Promise<void>;
+    await act(async () => {
+      reading = current.refresh();
+      void current.refresh();
+      void current.refresh();
+    });
+    expect(gets).toBe(2);
+    await act(async () => {
+      held.resolve(response(roomView('123456', 3)));
+      await reading;
+    });
+    expect(gets).toBe(3);
+    expect(current.view?.room.version).toBe(4);
+  });
+  it('discards a stuck read on network handoff and ignores its eventual old result', async () => {
+    const held = deferred<Response>();
+    let gets = 0;
+    handle((request) => {
+      if (request.action === 'get')
+        return ++gets === 2 ? held.promise : response(roomView('123456', gets + 1));
+    });
+    await mount();
+    let reading!: Promise<void>;
+    await act(async () => {
+      reading = current.refresh();
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'));
+      await reading;
+    });
+    await flush();
+    expect(current.view?.room.version).toBe(4);
+    await act(async () => {
+      held.resolve(response(roomView('123456', 99)));
+    });
+    expect(current.view?.room.version).toBe(4);
+  });
+  it('never automatically replays an unconfirmed private vote on reconnect', async () => {
+    handle((request) => {
+      if (request.action === 'command') throw new TypeError('network lost');
+      return undefined;
+    });
+    await mount();
+    await act(async () => {
+      await current.command({ type: 'questVote', success: false });
+    });
+    expect(current.pending).toBe(true);
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await flush();
+    expect(requests().filter((r) => r.action === 'command')).toHaveLength(1);
+    expect(current.pending).toBe(true);
+    expect(Object.values(localStorage).join('')).not.toContain('questVote');
+  });
 });
 
 describe('browser session recovery and mutation safety', () => {

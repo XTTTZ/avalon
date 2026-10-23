@@ -6,6 +6,8 @@
 
 德州扑克位于独立仓库 [`XTTTZ/avalon-poker`](https://github.com/XTTTZ/avalon-poker)，本仓库只构建和发布阿瓦隆。
 
+右上角「外观与安装」可选择浅色、深色或跟随系统，也可将网页添加到手机主屏幕。iPhone 在 Safari 的分享菜单选择「添加到主屏幕」；微信内先用系统浏览器打开。安装后仍需联网游戏，离线入口只显示重连提示，不缓存身份或对局。
+
 ## 本地运行
 
 需要 Node.js 24 和 npm。
@@ -42,7 +44,8 @@ npm run test:e2e
 ```
 
 - HTTP 操作使用 requestId、phaseKey、revision 和数据库原子提交，网络重试不会重复投票或推进游戏。
-- WebSocket 只发送房间实例、对局和版本号；客户端随后重新获取属于自己的状态。连接失败时自动降级为低频 polling。
+- WebSocket 只发送房间实例、对局和版本号；客户端随后重新获取属于自己的状态。心跳检测失效连接，锁屏、前后台和网络切换后自动重连；失败时保留低频 polling。恢复只读状态，不自动重投票。
+- Worker 可复用已完成的房间/用户快照，每次复用前仍向 Neon 核对 UUID revision。未变化时 Neon 仅返回修订号，避免反复传输整局记录；私人笔记单独读取。
 - Durable Object 不保存权威游戏状态，不广播身份、私人笔记或个人任务票。
 - 四位房号可以复用，服务端另用不可复用的房间 instanceId 隔离旧房和新房。
 
@@ -65,7 +68,9 @@ npm run test:e2e
 数据库 migration 必须通过 owner 的 direct、non-pooler 连接执行。Worker 使用 `avalon_runtime` 的 pooled 连接；该角色只能执行应用函数，不能直接读写权威表。首次部署前需确保角色已建立，然后执行：
 
 ```sh
-psql "$NEON_DIRECT_DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/0001_avalon.sql
+for migration in migrations/*.sql; do
+  psql "$NEON_DIRECT_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+done
 ```
 
 GitHub Actions Variables：
@@ -99,3 +104,5 @@ DNS 切换前，保持 `CUSTOM_DOMAIN_ENABLED=false`。workflow 会发布并检�
 - 大厅闲置 24 小时、局中闲置 48 小时、结算后 24 小时到期；读取和笔记编辑不续期。
 
 更改规则或秘密投影时，至少同时验证状态机、API 投影和手机 E2E。大厅不得暴露刺杀等策略性机制，完整说明只放在深层玩法帮助和本人角色信息中。
+
+`npm run test:e2e` 需要先运行 `npm run build`，同时验证开发页面与生产 PWA。Actions 另外在 PostgreSQL 17 验证缓存修订号、删除重建、权限和清理；更新无需新增密钥，部署会自动执行新增 migration。
